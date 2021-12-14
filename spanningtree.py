@@ -1,13 +1,13 @@
-from os import link
+from ryu import ofproto
 from ryu.base import app_manager
 from ryu.controller import ofp_event
-from ryu.controller.handler import MAIN_DISPATCHER
+from ryu.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER
 from ryu.controller.handler import set_ev_cls
 from ryu.lib.packet.ethernet import ethernet
 from ryu.ofproto import ofproto_v1_0
 from ryu.topology import event
-from ryu.topology.api import get_all_host, get_host, get_switch, get_link
-from ryu.lib.packet import packet, ethernet, ether_types
+from ryu.topology.api import get_all_host, get_switch, get_link
+from ryu.lib.packet import ether_types, packet, ethernet
 
 import copy
 import sys
@@ -25,6 +25,38 @@ class SpanningTreeController(app_manager.RyuApp):
         self.switchesMapping = {}   # Mapping between the switches' ids and mac addresses + ports
         self.links = []             # List of links
         self.topology = Topology(0) # Represent the topology
+    
+    def add_flow(self, datapath, priority, match, actions, buffer_id=None):
+        """
+        Add a flow inside a switch.
+
+        Arguments:
+        ----------
+        - `datapath`: Switch.
+        - `priority`: Priority of the flow.
+        - `match`: Matching rules.
+        - `actiosn`: Actions of the flow.
+        - `buffer_id`: ID of the packet inside the buffer of the switch.
+
+        Source: Official book (page 8).
+        """
+    
+        ofproto = datapath.ofproto
+        parser = datapath.ofproto_parser
+
+        if buffer_id:
+            mod = parser.OFPFlowMod(
+                datapath=datapath, buffer_id=buffer_id,
+                priority=priority, match=match,
+                actrions=actions
+            )
+        else:
+            mod = parser.OFPFlowMod(
+                datapath=datapath, priority=priority,
+                match=match, actions=actions
+            )
+        
+        datapath.send_msg(mod)
 
     @set_ev_cls(event.EventSwitchEnter, MAIN_DISPATCHER)
     def switch_in_handler(self, ev):
@@ -34,7 +66,7 @@ class SpanningTreeController(app_manager.RyuApp):
             and https://sdn-lab.com/2014/12/31/topology-discovery-with-ryu/
         """
 
-        print("Topology:")
+        print("\nTopology:")
         # Fetch data
         switch_list = copy.copy(get_switch(self, None))
         links_list = copy.copy(get_link(self, None))
@@ -72,11 +104,31 @@ class SpanningTreeController(app_manager.RyuApp):
         #self.topology.print()
         self.topology.primMST()
 
+    @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
+    def switch_features_handler(self, ev):
+        """
+        Handler when the controller receives the response to the features request.
+
+        Source: Official book (page 8)
+        """
+
+        datapath = ev.msg.datapath
+        ofproto = datapath.ofproto
+        parser = datapath.ofproto_parser
+
+        # Set the table-miss flow entry inside the switch.
+        match = parser.OFPMatch()
+        actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER)]
+        self.add_flow(datapath, 0, match, actions)
+
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def packet_in_handler(self, ev):
         """
         Handler called when a packet arrives at the controller.
         """
+
+        # Update the list of hosts
+        self._update_hosts_list()
 
         msg = ev.msg
         dp = msg.datapath
@@ -84,19 +136,20 @@ class SpanningTreeController(app_manager.RyuApp):
         ofp_parser = dp.ofproto_parser
 
         pkt = packet.Packet(msg.data)
-        pkt_protocol = pkt.get_protocol(ethernet.ethernet)
-        src = pkt_protocol.src
-        dst = pkt_protocol.dst
+        eth = pkt.get_protocol(ethernet.ethernet)
+        # Ignore link discovery packet
+        if eth == ether_types.ETH_TYPE_LLDP:
+            return
+        src = eth.src
+        dst = eth.dst
 
-        self._update_hosts_list()
-
-        #print("Packet from {} (id = {}) to {}".format(src, dp.id,dst))
+        print("Packet from {} to {} received at {} port {}".format(src, dst, dp.id, msg.in_port))
 
         actions = [ofp_parser.OFPActionOutput(ofp.OFPP_FLOOD)]
 
         data = None
         if msg.buffer_id == ofp.OFP_NO_BUFFER:
-             data = msg.data
+            data = msg.data
 
         out = ofp_parser.OFPPacketOut(
             datapath=dp, buffer_id=msg.buffer_id, in_port=msg.in_port,
@@ -118,7 +171,6 @@ class SpanningTreeController(app_manager.RyuApp):
         f.write("Nb hosts = " + str(len(hosts)) + "\n")
         for host in hosts:
             f.write(str(host) + "\n")
-            f.write(str(type(host)) + "\n")
         f.close()
     
     def _update_switch_mappings(self, swicthDetails):
