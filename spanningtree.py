@@ -1,3 +1,4 @@
+from os import link
 from ryu.base import app_manager
 from ryu.controller import ofp_event
 from ryu.controller.handler import MAIN_DISPATCHER
@@ -21,7 +22,7 @@ class SpanningTreeController(app_manager.RyuApp):
         super(SpanningTreeController, self).__init__(*args, **kwargs)
         self.hosts = []             # MAC address of the hosts
         self.switches = []          # ID of the switches
-        self.switchesMapping = []   # Mapping between the switches' ids and mac addresses + ports
+        self.switchesMapping = {}   # Mapping between the switches' ids and mac addresses + ports
         self.links = []             # List of links
         self.topology = Topology(0) # Represent the topology
 
@@ -29,7 +30,7 @@ class SpanningTreeController(app_manager.RyuApp):
     def switch_in_handler(self, ev):
         """
         Handler when a switch enters the topology.
-        Based on https://github.com/Ehsan70/RyuApps/blob/master/TopoDiscoveryInRyu.md
+        Partially based on https://github.com/Ehsan70/RyuApps/blob/master/TopoDiscoveryInRyu.md
             and https://sdn-lab.com/2014/12/31/topology-discovery-with-ryu/
         """
 
@@ -46,37 +47,24 @@ class SpanningTreeController(app_manager.RyuApp):
         hosts = [(host.mac) for host in hosts_list]
 
         # Print
-        #print("Nb hosts = {}".format(len(hosts)))
+        print("Nb hosts = {}".format(len(hosts)))
         #print("Hosts:")
         #print(sorted(hosts))
         print("Nb switches = {}".format(len(switches)))
-        print("Switches:")
-        print(sorted(switches))
-        print("Switch details")
-        for details in switchesDetails:
-            print(details)
-        
-        # Analyze first entry
-        print("Details switch 0")
-        print(switchesDetails[0]['ports'])
-        for i in range(len(switchesDetails[0]['ports'])):
-            print("Port number {}".format(switchesDetails[0]['ports'][i]['port_no']))
-            print("Port addr {}".format(switchesDetails[0]['ports'][i]['hw_addr']))
-            print("Port name {}".format(switchesDetails[0]['ports'][i]['name']))
-
-        #print("Nb links = {}".format(len(links)))
+        #print("Switches:")
+        #print(sorted(switches))
+        print("Nb links = {}".format(len(links)))
         #print("Links:")
         #print(links)
 
         # Mapping switches' ids and MAC addresses + ports
-        
+        self._update_switch_mappings(switchesDetails)
 
         # Save
-        self.hosts = []
+        self._update_hosts_list()
         self.switches = []
-        self.links = []
-        self.hosts = copy.copy(hosts)
         self.switches = copy.copy(switches)
+        self.links = []
         self.links = copy.copy(links)
 
         # Update topo
@@ -84,11 +72,10 @@ class SpanningTreeController(app_manager.RyuApp):
         #self.topology.print()
         self.topology.primMST()
 
-
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def packet_in_handler(self, ev):
         """
-        Handler a packet arrives at the controller.
+        Handler called when a packet arrives at the controller.
         """
 
         msg = ev.msg
@@ -118,7 +105,7 @@ class SpanningTreeController(app_manager.RyuApp):
 
     def _update_hosts_list(self):
         """
-        Updates the list of the hosts.
+        Updates the list of MAC addr of the hosts.
         """
 
         hosts_list = copy.copy(get_all_host(self))
@@ -131,7 +118,58 @@ class SpanningTreeController(app_manager.RyuApp):
         f.write("Nb hosts = " + str(len(hosts)) + "\n")
         for host in hosts:
             f.write(str(host) + "\n")
+            f.write(str(type(host)) + "\n")
         f.close()
+    
+    def _update_switch_mappings(self, swicthDetails):
+        """
+        Updates the mappings between the swicthes ids and ports' descriptions.
+
+        Arguments:
+        ----------
+        - `switchDetails`: Details about the switches.
+        """
+
+        self.switchesMapping.clear()
+        
+        for sw in range(len(swicthDetails)):
+            ports = _convert_port_description_to_dict(swicthDetails[sw]['ports'])
+            # Check for id of s0
+            if int(swicthDetails[sw]['dpid'], 16) == self.topology.s0ID:
+                self.switchesMapping.update({'0000000000000000': ports})
+            else:
+                self.switchesMapping.update({swicthDetails[sw]['dpid']: ports})
+        
+        print("Mapping between swicth id and ports desc.")
+        for switch in self.switchesMapping:
+            print(str(switch) + " -> " + str(self.switchesMapping[switch]))
+
+        # Temporary
+        f = open("switchMapping.txt", "w")
+        f.write("Switch details (nb entries = {})\n".format(len(self.switchesMapping.keys())))
+        for switch in self.switchesMapping:
+            f.write(str(switch) + ' = ' + str(self.switchesMapping[switch]) + '\n')
+        f.close()
+
+
+def _convert_port_description_to_dict(portsDesc):
+    """
+    Converts the description of the ports of a switch to a dict.
+
+    Arguments:
+    ----------
+    - `portDesc`: Description of the ports of a switch.
+
+    Return:
+    -------
+    Description of the ports as a dictionary.
+    """
+    
+    ports = {}
+    for i in range(len(portsDesc)):
+        ports.update({portsDesc[i]['port_no']: portsDesc[i]['hw_addr']})
+    
+    return ports
 
 
 class Topology:
@@ -151,6 +189,7 @@ class Topology:
         """
         self.nbElements = nbElements
         self._init_graph(self.nbElements)
+        self.s0ID = 0
 
     def _init_graph(self, size=0):
         """
@@ -212,7 +251,6 @@ class Topology:
                 s0ID = link[1]
 
         self.s0ID = s0ID
-        print("ID of s0 = {}".format(self.s0ID))
 
         # Fill graph
         for link in links:
@@ -241,6 +279,11 @@ class Topology:
     def printMST(self, parent):
         """
         Print the spanning tree.
+
+        Argument:
+        ---------
+        - `parent`: Represent the minimal spanning tree.
+    
         Source: https://www.geeksforgeeks.org/prims-minimum-spanning-tree-mst-greedy-algo-5/?ref=lbp
         """
         print("Tree")
@@ -257,6 +300,7 @@ class Topology:
  
         # Initialize min value
         min = sys.maxsize
+        min_index = 0
  
         for v in range(self.nbElements):
             if key[v] < min and mstSet[v] == False:
