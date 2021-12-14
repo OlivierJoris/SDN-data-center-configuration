@@ -1,3 +1,7 @@
+import copy
+import sys
+import numpy as np
+
 from ryu.base import app_manager
 from ryu.controller import ofp_event
 from ryu.controller.handler import MAIN_DISPATCHER
@@ -8,22 +12,22 @@ from ryu.topology import event
 from ryu.topology.api import get_all_host, get_host, get_switch, get_link
 from ryu.lib.packet import packet, ethernet, ether_types
 
-import copy
-import sys
-
-class SpanningTreeController(app_manager.RyuApp):
+class VLANsController(app_manager.RyuApp):
     OFP_VERSIONS = [ofproto_v1_0.OFP_VERSION]
     
     def __init__(self, *args, **kwargs):
         """
         Initialize.
         """
-        super(SpanningTreeController, self).__init__(*args, **kwargs)
+        super(VLANsController, self).__init__(*args, **kwargs)
         self.hosts = []             # MAC address of the hosts
         self.switches = []          # ID of the switches
-        self.switchesMapping = []   # Mapping between the switches' ids and mac addresses + ports
+        self.switchesMapping = {}   # Mapping between the switches' ids and mac addresses + ports
         self.links = []             # List of links
         self.topology = Topology(0) # Represent the topology
+        self.nbVLANs = 4
+
+        self.VLANs = {} # Mapping between hosts/switch and the VLANs to which it belongs to
 
     @set_ev_cls(event.EventSwitchEnter, MAIN_DISPATCHER)
     def switch_in_handler(self, ev):
@@ -46,45 +50,33 @@ class SpanningTreeController(app_manager.RyuApp):
         hosts = [(host.mac) for host in hosts_list]
 
         # Print
-        #print("Nb hosts = {}".format(len(hosts)))
+        print("Nb hosts = {}".format(len(hosts)))
         #print("Hosts:")
         #print(sorted(hosts))
         print("Nb switches = {}".format(len(switches)))
-        print("Switches:")
-        print(sorted(switches))
-        print("Switch details")
-        for details in switchesDetails:
-            print(details)
-        
-        # Analyze first entry
-        print("Details switch 0")
-        print(switchesDetails[0]['ports'])
-        for i in range(len(switchesDetails[0]['ports'])):
-            print("Port number {}".format(switchesDetails[0]['ports'][i]['port_no']))
-            print("Port addr {}".format(switchesDetails[0]['ports'][i]['hw_addr']))
-            print("Port name {}".format(switchesDetails[0]['ports'][i]['name']))
-
-        #print("Nb links = {}".format(len(links)))
+        #print("Switches:")
+        #print(sorted(switches))
+        print("Nb links = {}".format(len(links)))
         #print("Links:")
         #print(links)
 
         # Mapping switches' ids and MAC addresses + ports
-        
+        self._update_switch_mappings(switchesDetails)
 
         # Save
-        self.hosts = []
+        self._update_hosts_list()
         self.switches = []
-        self.links = []
-        self.hosts = copy.copy(hosts)
         self.switches = copy.copy(switches)
+        self.links = []
         self.links = copy.copy(links)
 
         # Update topo
         self.topology.fill_graph(len(self.switches), self.links)
         #self.topology.print()
-        self.topology.primMST()
+        #self.topology.primMST()
 
-
+        self._create_vlans()
+        
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def packet_in_handler(self, ev):
         """
@@ -133,6 +125,70 @@ class SpanningTreeController(app_manager.RyuApp):
             f.write(str(host) + "\n")
         f.close()
 
+    def _update_switch_mappings(self, swicthDetails):
+        """
+        Updates the mappings between the swicthes ids and ports' descriptions.
+        Arguments:
+        ----------
+        - `switchDetails`: Details about the switches.
+        """
+
+        self.switchesMapping.clear()
+        
+        for sw in range(len(swicthDetails)):
+            ports = _convert_port_description_to_dict(swicthDetails[sw]['ports'])
+            # Check for id of s0
+            if int(swicthDetails[sw]['dpid'], 16) == self.topology.s0ID:
+                self.switchesMapping.update({'0000000000000000': ports})
+            else:
+                self.switchesMapping.update({swicthDetails[sw]['dpid']: ports})
+        
+        print("Mapping between swicth id and ports desc.")
+        for switch in self.switchesMapping:
+            print(str(switch) + " -> " + str(self.switchesMapping[switch]))
+
+        # Temporary
+        f = open("switchMapping.txt", "w")
+        f.write("Switch details (nb entries = {})\n".format(len(self.switchesMapping.keys())))
+        for switch in self.switchesMapping:
+            f.write(str(switch) + ' = ' + str(self.switchesMapping[switch]) + '\n')
+        f.close()
+
+    def _create_vlans(self):
+        """
+        Associate hosts and switches to their respecting VLANs.
+        """
+        # Divide hosts in the VLANs
+        for i, host in enumerate(self.hosts):
+            self.VLANs[host] = i % self.nbVLANs
+
+        for switch in self.switches:
+            # Core switches are divided into VLANs
+            if switch >= 16 and switch <= 19:
+                self.VLANs[switch] = switch - 16
+            else:
+                # Other switches are not part of VLANs
+                self.VLANs[switch] = '*'
+
+        print("VLANs :")
+        print(self.VLANs)
+
+def _convert_port_description_to_dict(portsDesc):
+    """
+    Converts the description of the ports of a switch to a dict.
+    Arguments:
+    ----------
+    - `portDesc`: Description of the ports of a switch.
+    Return:
+    -------
+    Description of the ports as a dictionary.
+    """
+    
+    ports = {}
+    for i in range(len(portsDesc)):
+        ports.update({portsDesc[i]['port_no']: portsDesc[i]['hw_addr']})
+    
+    return ports
 
 class Topology:
     """
@@ -151,6 +207,7 @@ class Topology:
         """
         self.nbElements = nbElements
         self._init_graph(self.nbElements)
+        self.s0ID = 0
 
     def _init_graph(self, size=0):
         """
