@@ -87,21 +87,14 @@ class SpanningTreeController(app_manager.RyuApp):
         hosts = [(host.mac) for host in hosts_list]
 
         # Print
-        print("Nb hosts = {}".format(len(hosts)))
-        print("Hosts:")
-        print(sorted(hosts))
-        print("Nb switches = {}".format(len(switches)))
-        #print("Switches:")
-        #print(sorted(switches))
         print("Nb links = {}".format(len(links)))
-        #print("Links:")
-        #print(links)
+        print("Links:")
+        print(links)
 
         # Save
         self._update_hosts_list()
         self.switches = []
         self.switches = copy.copy(switches)
-        print("Switch id = {} (type = {})".format(ev.switch.dp.id, type(ev.switch.dp.id)))
         self.dataflows.update({ev.switch.dp.id: ev.switch.dp})
         self.links = []
         self.links = copy.copy(links)
@@ -157,7 +150,7 @@ class SpanningTreeController(app_manager.RyuApp):
         src = eth.src
         dst = eth.dst
 
-        if (src in self.hosts) or (dst in self.hosts):
+        if ((src in self.hosts) and (dst in self.hosts)) or ((src in self.hosts) and (dst == MAC_BROADCAST)):
             print("Packet from {} to {} received at sw {} port {}".format(src, dst, dp.id, msg.in_port))
 
         # If the destination is broadcast (e.g. in the case of ARP request) and the src is one of the host,
@@ -230,6 +223,11 @@ class SpanningTreeController(app_manager.RyuApp):
 
             return
 
+        if (src in self.hosts) and (dst in self.hosts):
+            self.compute_paths(src, dst)
+            print("")
+            return
+
 
         """
         actions = [ofp_parser.OFPActionOutput(ofp.OFPP_FLOOD)]
@@ -260,7 +258,11 @@ class SpanningTreeController(app_manager.RyuApp):
         
         self.hostSwitchMapping.clear()
         for host in range(len(hostDetails)):
-            self.hostSwitchMapping.update({hostDetails[host]['mac']: hostDetails[host]['port']['dpid']})
+            mapping = {
+                'dpid': hostDetails[host]['port']['dpid'],
+                'port': hostDetails[host]['port']['port_no']
+            }
+            self.hostSwitchMapping.update({hostDetails[host]['mac']: mapping})
 
         # Temporary
         f = open("hosts.txt", "w")
@@ -288,7 +290,7 @@ class SpanningTreeController(app_manager.RyuApp):
             else:
                 self.switchesMapping.update({switchDetails[sw]['dpid']: ports})
         
-        print("Mapping between swicth id and ports desc. (switch id -> {port id : port mac})")
+        print("Mapping between switch id and ports desc. (switch id -> {port id : port mac})")
         for switch in self.switchesMapping:
             print(str(switch) + " -> " + str(self.switchesMapping[switch]))
 
@@ -325,7 +327,7 @@ class SpanningTreeController(app_manager.RyuApp):
         nbSwitches = len(self.switches)
         sources = []
         for _ in range(nbSwitches):
-            sources.append(0)
+            sources.append("0")
         maps = []
         for _ in range(nbSwitches):
             maps.append({})
@@ -381,6 +383,69 @@ class SpanningTreeController(app_manager.RyuApp):
                 maxCount = countPorts[count]
         
         return (len(self.linksMap[switchID].keys()) != maxCount, maxCount)
+    
+    def compute_paths(self, src: str, dst: str):
+        """
+        Computes paths between source `src` and destination `dst`.
+        The returned paths are limited to links in the spanning tree.
+
+        Arguments:
+        ----------
+        - `src`: MAC address of source host.
+        - `dst`: MAC address of destination host.
+
+        Returns:
+        --------
+        - Paths between 2 hosts where a path is a list of switch ids.
+        """
+
+        print("Computing path btw {} and {}".format(src, dst))
+
+        # Get the spanning tree
+        tree = self.topology.primMST()
+
+        """
+        for link in tree:
+            if link[0] == switchID:
+                neighbors.append(link[1])
+            if link[1] == switchID:
+                neighbors.append(link[0])
+        """
+
+        # Get switch to which src and dst are connected.
+        switchSRC = self.hostSwitchMapping[src]['dpid']
+        switchDST = self.hostSwitchMapping[dst]['dpid']
+
+        print("switchSRC = {} and switchDST = {}".format(switchSRC, switchDST))
+
+        # If src and dst are connected to the same switch, return simple path.
+        if switchSRC == switchDST:
+            return [[switchSRC]] # Equivalently switchDST
+
+        # Compute path using DFS
+        paths = []
+        stack = [(switchSRC, [switchSRC])]
+        while stack:
+            print("stack = {}".format(stack))
+            node, path = stack.pop()
+            print("path = {}".format(path))
+            # Need to fetch the neighbors of last element of path.
+            last = path[-1]
+            print("last = {}".format(last))
+            neighbors = self.topology.findNeigborSwitches(int(last, 16))
+            print("neighbors = {}".format(neighbors))
+
+            for neighbor in neighbors:
+                n = convert_int_to_switch_id(neighbor)
+                if n == switchDST:
+                    paths.append(path + [n])
+                elif n not in path: # prevent loop by going back to last switch
+                    stack.append((n, path + [n]))
+
+        print("Paths between {} and {}".format(src, dst))
+        print(paths)
+
+        return paths
 
 
 def _convert_port_description_to_dict(portsDesc):
@@ -603,7 +668,7 @@ class Topology:
                         key[v] = self.graph[u][v]
                         parent[v] = u
  
-        self.printMST(parent)
+        #self.printMST(parent)
         
         tree = []
         for i in range(1, self.nbElements):
