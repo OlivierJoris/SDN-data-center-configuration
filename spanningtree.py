@@ -1,3 +1,4 @@
+from logging import BufferingFormatter
 from ryu import ofproto
 from ryu.base import app_manager
 from ryu.controller import ofp_event
@@ -8,9 +9,13 @@ from ryu.ofproto import ofproto_v1_0
 from ryu.topology import event
 from ryu.topology.api import get_all_host, get_switch, get_link
 from ryu.lib.packet import ether_types, packet, ethernet
+from ryu.lib.mac import haddr_to_bin
 
 import copy
 import sys
+
+MAC_BROADCAST = 'ff:ff:ff:ff:ff:ff'
+SIZE_SWITCH_ID_HEX = 16
 
 class SpanningTreeController(app_manager.RyuApp):
     OFP_VERSIONS = [ofproto_v1_0.OFP_VERSION]
@@ -48,7 +53,7 @@ class SpanningTreeController(app_manager.RyuApp):
             mod = parser.OFPFlowMod(
                 datapath=datapath, buffer_id=buffer_id,
                 priority=priority, match=match,
-                actrions=actions
+                actions=actions
             )
         else:
             mod = parser.OFPFlowMod(
@@ -149,8 +154,80 @@ class SpanningTreeController(app_manager.RyuApp):
         dst = eth.dst
 
         if (src in self.hosts) or (dst in self.hosts):
-            print("Packet from {} to {} received at {} port {}".format(src, dst, dp.id, msg.in_port))
+            print("Packet from {} to {} received at sw {} port {}".format(src, dst, dp.id, msg.in_port))
 
+        # If the destination is broadcast (e.g. in the case of ARP request) and the src is one of the host,
+        # need to add a flow to go back to the host and broadcast on all the ports of the spanning tree.
+        if src in self.hosts and dst == MAC_BROADCAST:
+            print("New flow for src in hosts and dst = broadcast")
+            # Flow to go back to the host.
+            match = ofp_parser.OFPMatch(dl_dst = src)
+            actions = [ofp_parser.OFPActionOutput(msg.in_port)]
+            self.add_flow(dp, 1, match, actions)
+            print("Add flow to go back to host: flow_dst={} action_port={}".format(src, msg.in_port))
+
+            # Flow that flood to neigbors of the switch in the spanning tree. 
+            switchIdInt = dp.id
+            if dp.id == self.topology.s0ID:
+                switchIdInt = 0
+
+            switchIdString = dp.id
+            if dp.id == self.topology.s0ID:
+                switchIdString = '0000000000000000'
+            else:
+                switchIdString = convert_int_to_switch_id(dp.id)
+            
+            # Get neighbors of switch in spanning tree.
+            neighbors = self.topology.findNeigborSwitches(switchIdInt)
+            print("Neighbors = {}".format(neighbors))
+
+            # Find the ports on which to send the packet to reach the neighbors.
+            listPorts = []
+            for neighbor in neighbors:
+                neighborID = convert_int_to_switch_id(neighbor)
+                port = self.linksMap[switchIdString][neighborID]
+                listPorts.append(port)
+            
+            # If the switch is a edge switch, send on ports of hosts.
+            edge, maxN = self._is_edge_switch(switchIdString)
+            if edge:
+                portsUsed = []
+                keys = self.linksMap[switchIdString].values()
+                for key in keys:
+                    portsUsed.append(int(key))
+                for i in range(maxN):
+                    if i not in portsUsed:
+                        listPorts.append(str(i))
+            
+            # Build actions: send on ports to reach neighbors.
+            actions = []
+            for port in listPorts:
+                if int(port) == msg.in_port: # do not send back on the port on which the packet arrive
+                    continue
+                print("Add flow to send packet on all allowed port: packet_src={} flow_dst={} action_port={}".format(src, dst, port))
+                actions.append(ofp_parser.OFPActionOutput(int(port)))
+            print("")
+
+            # Add flow
+            match = ofp_parser.OFPMatch(dl_src = src, dl_dst = dst)
+            self.add_flow(dp, 1, match, actions)
+
+            # Send OFPPacketOut for the current packert.
+            data = None
+            if msg.buffer_id == ofp.OFP_NO_BUFFER:
+                data = msg.data
+            
+            out = ofp_parser.OFPPacketOut(
+                datapath = dp, buffer_id = msg.buffer_id, in_port = msg.in_port,
+                actions = actions, data = data
+            )
+
+            dp.send_msg(out)
+
+            return
+
+
+        """
         actions = [ofp_parser.OFPActionOutput(ofp.OFPP_FLOOD)]
 
         data = None
@@ -161,6 +238,9 @@ class SpanningTreeController(app_manager.RyuApp):
             datapath=dp, buffer_id=msg.buffer_id, in_port=msg.in_port,
             actions=actions, data = data)
         dp.send_msg(out)
+        """
+
+        return
 
     def _update_hosts_list(self):
         """
@@ -228,6 +308,7 @@ class SpanningTreeController(app_manager.RyuApp):
                 s0ID = link[0]
             if link[1] > s0ID:
                 s0ID = link[1]
+        self.topology.s0ID = s0ID
 
         self.linksMap.clear()
 
@@ -265,6 +346,32 @@ class SpanningTreeController(app_manager.RyuApp):
         for source in self.linksMap:
             f.write(str(source) + " -> " + str(self.linksMap[source]) + "\n")
         f.close()
+    
+    def _is_edge_switch(self, switchID: str):
+        """
+        Return true if the switch is a edge/TOR switch. Else, return false.
+
+        Argument:
+        ---------
+        - `switchID`: ID of the switch as a string.
+
+        Return:
+        -------
+        Tuple containing whether the switch is a edge switch or not and the max
+        number of neighbors for a switch.
+        """
+
+        countPorts = {}
+        for switch in self.linksMap:
+            countPorts.update({switch: len(self.linksMap[switch].keys())})
+        
+        maxCount = 0
+        for count in countPorts:
+            if countPorts[count] > maxCount:
+                maxCount = countPorts[count]
+        
+        return (len(self.linksMap[switchID].keys()) != maxCount, maxCount)
+
 
 def _convert_port_description_to_dict(portsDesc):
     """
@@ -284,6 +391,26 @@ def _convert_port_description_to_dict(portsDesc):
         ports.update({portsDesc[i]['port_no']: portsDesc[i]['hw_addr']})
     
     return ports
+
+def convert_int_to_switch_id(integer):
+    """
+    Convert an integer in base 10 to a switch id as a string.
+
+    Arguments:
+    ----------
+    - `integer`: Integer to convert to string.
+
+    Return:
+    -------
+    Switch ID as a string.
+    """
+
+    hexString = hex(integer)
+    hexString = hexString[2:] # Remove 0x at the beginning of string
+    for _ in range(SIZE_SWITCH_ID_HEX - len(hexString)):
+        hexString = "0" + hexString
+    
+    return hexString
 
 
 class Topology:
@@ -400,7 +527,7 @@ class Topology:
     
         Source: https://www.geeksforgeeks.org/prims-minimum-spanning-tree-mst-greedy-algo-5/?ref=lbp
         """
-        print("Tree")
+        print("Spanning tree")
         print("Edge \tWeight")
         for i in range(1, self.nbElements):
             print(parent[i], "-", i, " | ", self.graph[i][ parent[i] ])
@@ -466,10 +593,35 @@ class Topology:
                         key[v] = self.graph[u][v]
                         parent[v] = u
  
-        #self.printMST(parent)
+        self.printMST(parent)
         
         tree = []
         for i in range(1, self.nbElements):
             tree.append([parent[i], i])
 
         return tree
+    
+    def findNeigborSwitches(self, switchID: int):
+        """
+        Find the neighbor switch(es) of the switch with the given ID.
+
+        Argument:
+        ---------
+        - `switchID`: ID of the switch we are considering.
+
+        Return:
+        -------
+        List of IDs of neighbor switches (can be empty).
+        """
+
+        neighbors = []
+
+        tree = self.primMST()
+
+        for link in tree:
+            if link[0] == switchID:
+                neighbors.append(link[1])
+            if link[1] == switchID:
+                neighbors.append(link[0])
+
+        return neighbors
