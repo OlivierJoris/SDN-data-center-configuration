@@ -396,27 +396,14 @@ class SpanningTreeController(app_manager.RyuApp):
 
         Returns:
         --------
-        - Paths between 2 hosts where a path is a list of switch ids.
+        - Paths between 2 hosts where a path is a list of switch ids (list of str).
         """
 
         print("Computing path btw {} and {}".format(src, dst))
 
-        # Get the spanning tree
-        tree = self.topology.primMST()
-
-        """
-        for link in tree:
-            if link[0] == switchID:
-                neighbors.append(link[1])
-            if link[1] == switchID:
-                neighbors.append(link[0])
-        """
-
         # Get switch to which src and dst are connected.
         switchSRC = self.hostSwitchMapping[src]['dpid']
         switchDST = self.hostSwitchMapping[dst]['dpid']
-
-        print("switchSRC = {} and switchDST = {}".format(switchSRC, switchDST))
 
         # If src and dst are connected to the same switch, return simple path.
         if switchSRC == switchDST:
@@ -426,14 +413,10 @@ class SpanningTreeController(app_manager.RyuApp):
         paths = []
         stack = [(switchSRC, [switchSRC])]
         while stack:
-            print("stack = {}".format(stack))
-            node, path = stack.pop()
-            print("path = {}".format(path))
+            _, path = stack.pop()
             # Need to fetch the neighbors of last element of path.
             last = path[-1]
-            print("last = {}".format(last))
             neighbors = self.topology.findNeigborSwitches(int(last, 16))
-            print("neighbors = {}".format(neighbors))
 
             for neighbor in neighbors:
                 n = convert_int_to_switch_id(neighbor)
