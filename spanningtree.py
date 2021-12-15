@@ -1,4 +1,3 @@
-from logging import BufferingFormatter
 from ryu import ofproto
 from ryu.base import app_manager
 from ryu.controller import ofp_event
@@ -9,30 +8,33 @@ from ryu.ofproto import ofproto_v1_0
 from ryu.topology import event
 from ryu.topology.api import get_all_host, get_switch, get_link
 from ryu.lib.packet import ether_types, packet, ethernet
-from ryu.lib.mac import haddr_to_bin
 
 import copy
 import sys
 
-MAC_BROADCAST = 'ff:ff:ff:ff:ff:ff'
-SIZE_SWITCH_ID_HEX = 16
+MAC_BROADCAST = 'ff:ff:ff:ff:ff:ff' # MAC addr for broadcast
+SIZE_SWITCH_ID_HEX = 16             # Nb of hexadecimal digits in a switch ID
 
 class SpanningTreeController(app_manager.RyuApp):
-    OFP_VERSIONS = [ofproto_v1_0.OFP_VERSION]
+    """
+    Implementation of controller that builds a spanning tree.
+    """
+
+    OFP_VERSIONS = [ofproto_v1_0.OFP_VERSION] # Set OpenFlow version
     
     def __init__(self, *args, **kwargs):
         """
         Initialize.
         """
         super(SpanningTreeController, self).__init__(*args, **kwargs)
-        self.hosts = []             # MAC address of the hosts
+        self.hosts = []             # MAC addresses of the hosts
         self.hostSwitchMapping = {} # Mapping between the id of a host and the id of the switch to which its is connected.
-        self.switches = []          # ID of the switches
+        self.switches = []          # IDs of the switches
         self.switchesMapping = {}   # Mapping between the switches' ids and mac addresses + ports
         self.dataflows = {}         # Mapping between switch ID (int) and associated dataflow object.
         self.links = []             # List of links
-        self.linksMap = {}          # Mapping between a switch id and the id of a neighbor switch and the port to reach it.
-        self.topology = Topology(0) # Represent the topology
+        self.linksMap = {}          # Mapping between a switch id and the id of a neighbor switch with the port to reach it.
+        self.topology = Topology(0) # Represents the topology
     
     def add_flow(self, datapath, priority, match, actions, buffer_id=None):
         """
@@ -40,13 +42,13 @@ class SpanningTreeController(app_manager.RyuApp):
 
         Arguments:
         ----------
-        - `datapath`: Switch.
+        - `datapath`: Datapath that represent the switch.
         - `priority`: Priority of the flow.
         - `match`: Matching rule.
-        - `actiosn`: Actions of the flow.
+        - `actions`: Actions of the flow.
         - `buffer_id`: ID of the packet inside the buffer of the switch.
 
-        Source: Official book (page 8).
+        Source: Based on official book (page 8). Adapted to OpenFlow 1.0.
         """
 
         parser = datapath.ofproto_parser
@@ -73,23 +75,15 @@ class SpanningTreeController(app_manager.RyuApp):
             and https://sdn-lab.com/2014/12/31/topology-discovery-with-ryu/
         """
 
-        print("\nTopology:")
         # Fetch data
         switch_list = copy.copy(get_switch(self, None))
         links_list = copy.copy(get_link(self, None))
-        hosts_list = copy.copy(get_all_host(self))
 
         # List format
         switches = [switch.dp.id for switch in switch_list]
         switchesDetails = [switch.to_dict() for switch in switch_list]
         links = [(link.src.dpid,link.dst.dpid) for link in links_list]
         linksDetails = [link.to_dict() for link in links_list]
-        hosts = [(host.mac) for host in hosts_list]
-
-        # Print
-        print("Nb links = {}".format(len(links)))
-        print("Links:")
-        print(links)
 
         # Save
         self._update_hosts_list()
@@ -105,15 +99,15 @@ class SpanningTreeController(app_manager.RyuApp):
         # Map of links
         self._update_link_map(links, linksDetails)
 
-        # Update topo
+        # Update topo and build minimal spanning tree
         self.topology.fill_graph(len(self.switches), self.links)
-        #self.topology.print()
         self.topology.primMST()
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def switch_features_handler(self, ev):
         """
-        Handler when the controller receives the response to the features request.
+        Handler when the controller receives the response to the
+        features request for a switch.
 
         Source: Official book (page 8)
         """
@@ -154,7 +148,8 @@ class SpanningTreeController(app_manager.RyuApp):
             print("Packet from {} to {} received at sw {} port {}".format(src, dst, dp.id, msg.in_port))
 
         # If the destination is broadcast (e.g. in the case of ARP request) and the src is one of the host,
-        # need to add a flow to go back to the host and broadcast on all the ports of the spanning tree.
+        # need to add a flow to go back to the host and broadcast on all the ports of the switch
+        # connected to the spanning tree
         if src in self.hosts and dst == MAC_BROADCAST:
             print("New flow for src in hosts and dst = broadcast")
             # Flow to go back to the host.
@@ -199,7 +194,7 @@ class SpanningTreeController(app_manager.RyuApp):
             # Build actions: send on ports to reach neighbors.
             actions = []
             for port in listPorts:
-                if int(port) == msg.in_port: # do not send back on the port on which the packet arrive
+                if int(port) == msg.in_port: # do not send back on the port on which the packet arrived
                     continue
                 print("Add flow to send packet on all allowed port: packet_src={} flow_dst={} action_port={}".format(src, dst, port))
                 actions.append(ofp_parser.OFPActionOutput(int(port)))
@@ -209,7 +204,7 @@ class SpanningTreeController(app_manager.RyuApp):
             match = ofp_parser.OFPMatch(dl_src = src, dl_dst = dst)
             self.add_flow(dp, 1, match, actions)
 
-            # Send OFPPacketOut for the current packert.
+            # Send OFPPacketOut for the current packet.
             data = None
             if msg.buffer_id == ofp.OFP_NO_BUFFER:
                 data = msg.data
@@ -246,7 +241,9 @@ class SpanningTreeController(app_manager.RyuApp):
 
     def _update_hosts_list(self):
         """
-        Updates the list of MAC addr of the hosts.
+        Updates the list of MAC addresses of the hosts and the mapping
+        between the hosts' ids and the id of the switch to which each host
+        is connected.
         """
 
         hosts_list = copy.copy(get_all_host(self))
@@ -263,17 +260,10 @@ class SpanningTreeController(app_manager.RyuApp):
                 'port': hostDetails[host]['port']['port_no']
             }
             self.hostSwitchMapping.update({hostDetails[host]['mac']: mapping})
-
-        # Temporary
-        f = open("hosts.txt", "w")
-        f.write("Nb hosts = " + str(len(hosts)) + "\n")
-        for host in hosts:
-            f.write(str(host) + "\n")
-        f.close()
     
-    def _update_switch_mappings(self, switchDetails):
+    def _update_switch_mappings(self, switchDetails: list):
         """
-        Updates the mappings between the swicthes ids and ports' descriptions.
+        Updates the mappings between the switches ids and ports' descriptions.
 
         Arguments:
         ----------
@@ -294,14 +284,7 @@ class SpanningTreeController(app_manager.RyuApp):
         for switch in self.switchesMapping:
             print(str(switch) + " -> " + str(self.switchesMapping[switch]))
 
-        # Temporary
-        f = open("switchMapping.txt", "w")
-        f.write("Switch details (nb entries = {})\n".format(len(self.switchesMapping.keys())))
-        for switch in self.switchesMapping:
-            f.write(str(switch) + ' -> ' + str(self.switchesMapping[switch]) + '\n')
-        f.close()
-
-    def _update_link_map(self, links, linksDetails):
+    def _update_link_map(self, links: list, linksDetails: list):
         """
         Updates the mapping between a switch id and the id of a neighbor switch and the port to reach it.
 
@@ -332,6 +315,7 @@ class SpanningTreeController(app_manager.RyuApp):
         for _ in range(nbSwitches):
             maps.append({})
 
+        # For each link, build a dictionary
         for link in linksDetails:
             sourceID = link['src']['dpid']
             destID = link['dst']['dpid']
@@ -345,19 +329,13 @@ class SpanningTreeController(app_manager.RyuApp):
             sources[int(sourceID, 16)] = sourceID
             maps[int(sourceID, 16)].update({destID: sourceOutPort})
 
+        # Group dictionaries by source switch
         for source in sources:
             self.linksMap.update({source: maps[int(source, 16)]})
         
         print("Link map (switch id -> {neighbor switch id: port of source to reach neigbor})")
         for source in self.linksMap:
             print(str(source) + " -> " + str(self.linksMap[source]))
-
-        # Temporary
-        f = open("linksmap.txt", "w")
-        f.write("Map of links\n")
-        for source in self.linksMap:
-            f.write(str(source) + " -> " + str(self.linksMap[source]) + "\n")
-        f.close()
     
     def _is_edge_switch(self, switchID: str):
         """
@@ -365,12 +343,12 @@ class SpanningTreeController(app_manager.RyuApp):
 
         Argument:
         ---------
-        - `switchID`: ID of the switch as a string.
+        - `switchID`: ID of the switch.
 
         Return:
         -------
         Tuple containing whether the switch is a edge switch or not and the max
-        number of neighbors for a switch.
+        number of links for a switch.
         """
 
         countPorts = {}
@@ -384,7 +362,7 @@ class SpanningTreeController(app_manager.RyuApp):
         
         return (len(self.linksMap[switchID].keys()) != maxCount, maxCount)
     
-    def compute_paths(self, src: str, dst: str):
+    def compute_paths(self, src: str, dst: str) -> list:
         """
         Computes paths between source `src` and destination `dst`.
         The returned paths are limited to links in the spanning tree.
@@ -401,11 +379,11 @@ class SpanningTreeController(app_manager.RyuApp):
 
         print("Computing path btw {} and {}".format(src, dst))
 
-        # Get switch to which src and dst are connected.
+        # Get switch to which src and dst are connected
         switchSRC = self.hostSwitchMapping[src]['dpid']
         switchDST = self.hostSwitchMapping[dst]['dpid']
 
-        # If src and dst are connected to the same switch, return simple path.
+        # If src and dst are connected to the same switch, return simple path
         if switchSRC == switchDST:
             return [[switchSRC]] # Equivalently switchDST
 
@@ -414,7 +392,7 @@ class SpanningTreeController(app_manager.RyuApp):
         stack = [(switchSRC, [switchSRC])]
         while stack:
             _, path = stack.pop()
-            # Need to fetch the neighbors of last element of path.
+            # Need to fetch the neighbors of last element of path
             last = path[-1]
             neighbors = self.topology.findNeigborSwitches(int(last, 16))
 
@@ -431,7 +409,7 @@ class SpanningTreeController(app_manager.RyuApp):
         return paths
 
 
-def _convert_port_description_to_dict(portsDesc):
+def _convert_port_description_to_dict(portsDesc: list) -> dict:
     """
     Converts the description of the ports of a switch to a dict.
 
@@ -450,7 +428,7 @@ def _convert_port_description_to_dict(portsDesc):
     
     return ports
 
-def convert_int_to_switch_id(integer):
+def convert_int_to_switch_id(integer: int) -> str:
     """
     Convert an integer in base 10 to a switch id as a string.
 
@@ -467,20 +445,20 @@ def convert_int_to_switch_id(integer):
     hexString = hexString[2:] # Remove 0x at the beginning of string
     for _ in range(SIZE_SWITCH_ID_HEX - len(hexString)):
         hexString = "0" + hexString
-    
+
     return hexString
 
 
 class Topology:
     """
     Represents the topology of the network by an undirected graph where
-    the vertices of the graph are the network elements (hosts and switches)
+    the vertices of the graph are the network elements (switches)
     and the edges are the links between the elements.
     """
 
-    def __init__(self, nbElements):
+    def __init__(self, nbElements: int):
         """
-        Initialize the object.
+        Initializes the object.
 
         Arguments:
         ----------
@@ -490,7 +468,7 @@ class Topology:
         self._init_graph(self.nbElements)
         self.s0ID = 0
 
-    def _init_graph(self, size=0):
+    def _init_graph(self, size: int=0):
         """
         Initializes the graph with a given size.
 
@@ -509,7 +487,7 @@ class Topology:
 
     def print(self):
         """
-        Print the graph.
+        Prints the graph.
         """
 
         print("Topology: size {}".format(self.nbElements))
@@ -522,15 +500,15 @@ class Topology:
             print("")
         print("")
     
-    def fill_graph(self, nbElements, links):
+    def fill_graph(self, nbElements: int, links: list):
         """
-        Fill the graph of `nbElements` network elements with the given
+        Fills the graph of `nbElements` network elements with the given
         `links`.
 
         Arguments:
         ----------
         - `nbElements`: Number of elements in the graph.
-        - `links`: List of links represented as an array of tuples
+        - `links`: List of links represented as a list of tuples
          (each tuple has a size of 2) and the elements of each tuple are the ids
          of the network elements.
         """
@@ -575,9 +553,9 @@ class Topology:
             except IndexError as _:
                 continue
     
-    def printMST(self, parent):
+    def printMST(self, parent: list):
         """
-        Print the spanning tree.
+        Prints the spanning tree.
 
         Argument:
         ---------
@@ -585,19 +563,24 @@ class Topology:
     
         Source: https://www.geeksforgeeks.org/prims-minimum-spanning-tree-mst-greedy-algo-5/?ref=lbp
         """
+
         print("Spanning tree")
         print("Edge \tWeight")
         for i in range(1, self.nbElements):
             print(parent[i], "-", i, " | ", self.graph[i][ parent[i] ])
         print("")
  
-    def minKey(self, key, mstSet):
+    def minKey(self, key: list, mstSet: list) -> int:
         """
-        Find vertices with minimal cost.
+        Finds vertices with minimal cost.
+
+        Return:
+        -------
+        Index of vertex with minimal cost.
+
         Source: https://www.geeksforgeeks.org/prims-minimum-spanning-tree-mst-greedy-algo-5/?ref=lbp
         """
  
-        # Initialize min value
         min = sys.maxsize
         min_index = 0
  
@@ -608,45 +591,31 @@ class Topology:
  
         return min_index
  
-    def primMST(self):
+    def primMST(self) -> list:
         """
-        Compute the minimum spanning tree with Prim's algorithm.
-        Source: https://www.geeksforgeeks.org/prims-minimum-spanning-tree-mst-greedy-algo-5/?ref=lbp
+        Computes the minimum spanning tree with Prim's algorithm.
 
         Return:
         -------
-        Return the links that form the minimal spanning tree.
+        Links that form the minimal spanning tree.
+
+        Source: https://www.geeksforgeeks.org/prims-minimum-spanning-tree-mst-greedy-algo-5/?ref=lbp
         """
- 
-        # Key values used to pick minimum weight edge in cut
+
         key = [sys.maxsize] * self.nbElements
-        parent = [None] * self.nbElements # Array to store constructed MST
-        # Make key 0 so that this vertex is picked as first vertex
+        parent = [None] * self.nbElements # Minimal spanning tree
         key[0] = 0
         mstSet = [False] * self.nbElements
  
-        parent[0] = -1 # First node is always the root of
+        parent[0] = -1
  
         for cout in range(self.nbElements):
  
-            # Pick the minimum distance vertex from
-            # the set of vertices not yet processed.
-            # u is always equal to src in first iteration
             u = self.minKey(key, mstSet)
- 
-            # Put the minimum distance vertex in
-            # the shortest path tree
+
             mstSet[u] = True
  
-            # Update dist value of the adjacent vertices
-            # of the picked vertex only if the current
-            # distance is greater than new distance and
-            # the vertex in not in the shortest path tree
             for v in range(self.nbElements):
- 
-                # graph[u][v] is non zero only for adjacent vertices of m
-                # mstSet[v] is false for vertices not yet included in MST
-                # Update the key only if graph[u][v] is smaller than key[v]
                 if self.graph[u][v] > 0 and mstSet[v] == False and key[v] > self.graph[u][v]:
                         key[v] = self.graph[u][v]
                         parent[v] = u
@@ -658,10 +627,11 @@ class Topology:
             tree.append([parent[i], i])
 
         return tree
-    
-    def findNeigborSwitches(self, switchID: int):
+
+    def findNeigborSwitches(self, switchID: int) -> list:
         """
         Find the neighbor switch(es) of the switch with the given ID.
+        The neighbors are limited to the ones in the minimal spanning tree.
 
         Argument:
         ---------
