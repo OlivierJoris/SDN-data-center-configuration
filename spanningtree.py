@@ -35,14 +35,13 @@ class SpanningTreeController(app_manager.RyuApp):
         ----------
         - `datapath`: Switch.
         - `priority`: Priority of the flow.
-        - `match`: Matching rules.
+        - `match`: Matching rule.
         - `actiosn`: Actions of the flow.
         - `buffer_id`: ID of the packet inside the buffer of the switch.
 
         Source: Official book (page 8).
         """
-    
-        ofproto = datapath.ofproto
+
         parser = datapath.ofproto_parser
 
         if buffer_id:
@@ -77,14 +76,13 @@ class SpanningTreeController(app_manager.RyuApp):
         switches = [switch.dp.id for switch in switch_list]
         switchesDetails = [switch.to_dict() for switch in switch_list]
         links = [(link.src.dpid,link.dst.dpid) for link in links_list]
-        hosts = [(host.mac) for host in hosts_list]
-
         linksDetails = [link.to_dict() for link in links_list]
+        hosts = [(host.mac) for host in hosts_list]
 
         # Print
         print("Nb hosts = {}".format(len(hosts)))
-        #print("Hosts:")
-        #print(sorted(hosts))
+        print("Hosts:")
+        print(sorted(hosts))
         print("Nb switches = {}".format(len(switches)))
         #print("Switches:")
         #print(sorted(switches))
@@ -92,18 +90,18 @@ class SpanningTreeController(app_manager.RyuApp):
         #print("Links:")
         #print(links)
 
-        # Mapping switches' ids and MAC addresses + ports
-        self._update_switch_mappings(switchesDetails)
-
-        # Map of links
-        self._update_link_map(links, linksDetails)
-
         # Save
         self._update_hosts_list()
         self.switches = []
         self.switches = copy.copy(switches)
         self.links = []
         self.links = copy.copy(links)
+
+        # Mapping switches' ids and MAC addresses + ports
+        self._update_switch_mappings(switchesDetails)
+
+        # Map of links
+        self._update_link_map(links, linksDetails)
 
         # Update topo
         self.topology.fill_graph(len(self.switches), self.links)
@@ -143,6 +141,7 @@ class SpanningTreeController(app_manager.RyuApp):
 
         pkt = packet.Packet(msg.data)
         eth = pkt.get_protocol(ethernet.ethernet)
+
         # Ignore link discovery packet
         if eth == ether_types.ETH_TYPE_LLDP:
             return
@@ -180,7 +179,7 @@ class SpanningTreeController(app_manager.RyuApp):
             f.write(str(host) + "\n")
         f.close()
     
-    def _update_switch_mappings(self, swicthDetails):
+    def _update_switch_mappings(self, switchDetails):
         """
         Updates the mappings between the swicthes ids and ports' descriptions.
 
@@ -191,15 +190,15 @@ class SpanningTreeController(app_manager.RyuApp):
 
         self.switchesMapping.clear()
         
-        for sw in range(len(swicthDetails)):
-            ports = _convert_port_description_to_dict(swicthDetails[sw]['ports'])
+        for sw in range(len(switchDetails)):
+            ports = _convert_port_description_to_dict(switchDetails[sw]['ports'])
             # Check for id of s0
-            if int(swicthDetails[sw]['dpid'], 16) == self.topology.s0ID:
+            if int(switchDetails[sw]['dpid'], 16) == self.topology.s0ID:
                 self.switchesMapping.update({'0000000000000000': ports})
             else:
-                self.switchesMapping.update({swicthDetails[sw]['dpid']: ports})
+                self.switchesMapping.update({switchDetails[sw]['dpid']: ports})
         
-        print("Mapping between swicth id and ports desc.")
+        print("Mapping between swicth id and ports desc. (switch id -> {port id : port mac})")
         for switch in self.switchesMapping:
             print(str(switch) + " -> " + str(self.switchesMapping[switch]))
 
@@ -207,7 +206,7 @@ class SpanningTreeController(app_manager.RyuApp):
         f = open("switchMapping.txt", "w")
         f.write("Switch details (nb entries = {})\n".format(len(self.switchesMapping.keys())))
         for switch in self.switchesMapping:
-            f.write(str(switch) + ' = ' + str(self.switchesMapping[switch]) + '\n')
+            f.write(str(switch) + ' -> ' + str(self.switchesMapping[switch]) + '\n')
         f.close()
 
     def _update_link_map(self, links, linksDetails):
@@ -216,6 +215,7 @@ class SpanningTreeController(app_manager.RyuApp):
 
         Arguments:
         ----------
+        - `links`: List of links.
         - `linksDetials`: Details about the links.
         """
 
@@ -255,7 +255,7 @@ class SpanningTreeController(app_manager.RyuApp):
         for source in sources:
             self.linksMap.update({source: maps[int(source, 16)]})
         
-        print("Link map")
+        print("Link map (switch id -> {neighbor switch id: port of source to reach neigbor})")
         for source in self.linksMap:
             print(str(source) + " -> " + str(self.linksMap[source]))
 
@@ -272,7 +272,7 @@ def _convert_port_description_to_dict(portsDesc):
 
     Arguments:
     ----------
-    - `portDesc`: Description of the ports of a switch.
+    - `portsDesc`: Description of the ports of a switch.
 
     Return:
     -------
