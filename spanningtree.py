@@ -26,8 +26,10 @@ class SpanningTreeController(app_manager.RyuApp):
         """
         super(SpanningTreeController, self).__init__(*args, **kwargs)
         self.hosts = []             # MAC address of the hosts
+        self.hostSwitchMapping = {} # Mapping between the id of a host and the id of the switch to which its is connected.
         self.switches = []          # ID of the switches
         self.switchesMapping = {}   # Mapping between the switches' ids and mac addresses + ports
+        self.dataflows = {}         # Mapping between switch ID (int) and associated dataflow object.
         self.links = []             # List of links
         self.linksMap = {}          # Mapping between a switch id and the id of a neighbor switch and the port to reach it.
         self.topology = Topology(0) # Represent the topology
@@ -99,6 +101,8 @@ class SpanningTreeController(app_manager.RyuApp):
         self._update_hosts_list()
         self.switches = []
         self.switches = copy.copy(switches)
+        print("Switch id = {} (type = {})".format(ev.switch.dp.id, type(ev.switch.dp.id)))
+        self.dataflows.update({ev.switch.dp.id: ev.switch.dp})
         self.links = []
         self.links = copy.copy(links)
 
@@ -251,6 +255,12 @@ class SpanningTreeController(app_manager.RyuApp):
         hosts = [(host.mac) for host in hosts_list]
         self.hosts = []
         self.hosts = copy.copy(hosts)
+
+        hostDetails = [host.to_dict() for host in hosts_list]
+        
+        self.hostSwitchMapping.clear()
+        for host in range(len(hostDetails)):
+            self.hostSwitchMapping.update({hostDetails[host]['mac']: hostDetails[host]['port']['dpid']})
 
         # Temporary
         f = open("hosts.txt", "w")
