@@ -132,15 +132,13 @@ class SpanningTreeController(app_manager.RyuApp):
 
         msg = ev.msg
         dp = msg.datapath
-        ofp = dp.ofproto
-        ofp_parser = dp.ofproto_parser
 
         pkt = packet.Packet(msg.data)
         eth = pkt.get_protocol(ethernet.ethernet)
-
         # Ignore link discovery packet
         if eth == ether_types.ETH_TYPE_LLDP:
             return
+
         src = eth.src
         dst = eth.dst
 
@@ -151,71 +149,7 @@ class SpanningTreeController(app_manager.RyuApp):
         # need to add a flow to go back to the host and broadcast on all the ports of the switch
         # connected to the spanning tree
         if src in self.hosts and dst == MAC_BROADCAST:
-            print("New flow for src in hosts and dst = broadcast")
-            # Flow to go back to the host.
-            match = ofp_parser.OFPMatch(dl_dst = src)
-            actions = [ofp_parser.OFPActionOutput(msg.in_port)]
-            self.add_flow(dp, 1, match, actions)
-            print("Add flow to go back to host: flow_dst={} action_port={}".format(src, msg.in_port))
-
-            # Flow that flood to neigbors of the switch in the spanning tree. 
-            switchIdInt = dp.id
-            if dp.id == self.topology.s0ID:
-                switchIdInt = 0
-
-            switchIdString = dp.id
-            if dp.id == self.topology.s0ID:
-                switchIdString = '0000000000000000'
-            else:
-                switchIdString = convert_int_to_switch_id(dp.id)
-            
-            # Get neighbors of switch in spanning tree.
-            neighbors = self.topology.findNeigborSwitches(switchIdInt)
-            print("Neighbors = {}".format(neighbors))
-
-            # Find the ports on which to send the packet to reach the neighbors.
-            listPorts = []
-            for neighbor in neighbors:
-                neighborID = convert_int_to_switch_id(neighbor)
-                port = self.linksMap[switchIdString][neighborID]
-                listPorts.append(port)
-            
-            # If the switch is a edge switch, send on ports of hosts.
-            edge, maxN = self._is_edge_switch(switchIdString)
-            if edge:
-                portsUsed = []
-                keys = self.linksMap[switchIdString].values()
-                for key in keys:
-                    portsUsed.append(int(key))
-                for i in range(maxN):
-                    if i not in portsUsed:
-                        listPorts.append(str(i))
-            
-            # Build actions: send on ports to reach neighbors.
-            actions = []
-            for port in listPorts:
-                if int(port) == msg.in_port: # do not send back on the port on which the packet arrived
-                    continue
-                print("Add flow to send packet on all allowed port: packet_src={} flow_dst={} action_port={}".format(src, dst, port))
-                actions.append(ofp_parser.OFPActionOutput(int(port)))
-            print("")
-
-            # Add flow
-            match = ofp_parser.OFPMatch(dl_src = src, dl_dst = dst)
-            self.add_flow(dp, 1, match, actions)
-
-            # Send OFPPacketOut for the current packet.
-            data = None
-            if msg.buffer_id == ofp.OFP_NO_BUFFER:
-                data = msg.data
-            
-            out = ofp_parser.OFPPacketOut(
-                datapath = dp, buffer_id = msg.buffer_id, in_port = msg.in_port,
-                actions = actions, data = data
-            )
-
-            dp.send_msg(out)
-
+            self.flood_neigbors(ev)
             return
 
         if (src in self.hosts) and (dst in self.hosts):
@@ -223,21 +157,98 @@ class SpanningTreeController(app_manager.RyuApp):
             print("")
             return
 
+        return
 
+    def flood_neigbors(self, ev):
         """
-        actions = [ofp_parser.OFPActionOutput(ofp.OFPP_FLOOD)]
+        Flood a packet to the neighbors of the switch.
+        Neighbors are limited to the ones connected to the switch
+        in the minimal spanning tree.
 
+        Argument:
+        ---------
+        - `ev`: Event that generated the request to flood.
+        """
+
+        # If the destination is broadcast (e.g. in the case of ARP request) and the src is one of the host,
+        # need to add a flow to go back to the host and broadcast on all the ports of the switch
+        # connected to the spanning tree
+
+        msg = ev.msg
+        dp = msg.datapath
+        ofp = dp.ofproto
+        ofp_parser = dp.ofproto_parser
+
+        pkt = packet.Packet(msg.data)
+        eth = pkt.get_protocol(ethernet.ethernet)
+
+        src = eth.src
+        dst = eth.dst
+
+        print("New flow for src in hosts and dst = broadcast")
+        # Flow to go back to the host.
+        match = ofp_parser.OFPMatch(dl_dst = src)
+        actions = [ofp_parser.OFPActionOutput(msg.in_port)]
+        self.add_flow(dp, 1, match, actions)
+        print("Add flow to go back to host: flow_dst={} action_port={}".format(src, msg.in_port))
+
+        # Flow that flood to neigbors of the switch in the spanning tree. 
+        switchIdInt = dp.id
+        if dp.id == self.topology.s0ID:
+            switchIdInt = 0
+
+        switchIdString = dp.id
+        if dp.id == self.topology.s0ID:
+            switchIdString = '0000000000000000'
+        else:
+            switchIdString = convert_int_to_switch_id(dp.id)
+        
+        # Get neighbors of switch in spanning tree.
+        neighbors = self.topology.findNeigborSwitches(switchIdInt)
+        print("Neighbors = {}".format(neighbors))
+
+        # Find the ports on which to send the packet to reach the neighbors.
+        listPorts = []
+        for neighbor in neighbors:
+            neighborID = convert_int_to_switch_id(neighbor)
+            port = self.linksMap[switchIdString][neighborID]
+            listPorts.append(port)
+        
+        # If the switch is a edge switch, send on ports of hosts.
+        edge, maxN = self._is_edge_switch(switchIdString)
+        if edge:
+            portsUsed = []
+            keys = self.linksMap[switchIdString].values()
+            for key in keys:
+                portsUsed.append(int(key))
+            for i in range(maxN):
+                if i not in portsUsed:
+                    listPorts.append(str(i))
+        
+        # Build actions: send on ports to reach neighbors.
+        actions = []
+        for port in listPorts:
+            if int(port) == msg.in_port: # do not send back on the port on which the packet arrived
+                continue
+            print("Add flow to send packet on all allowed port: packet_src={} flow_dst={} action_port={}".format(src, dst, port))
+            actions.append(ofp_parser.OFPActionOutput(int(port)))
+        print("")
+
+        # Add flow
+        match = ofp_parser.OFPMatch(dl_src = src, dl_dst = dst)
+        self.add_flow(dp, 1, match, actions)
+
+        # Send OFPPacketOut for the current packet.
         data = None
         if msg.buffer_id == ofp.OFP_NO_BUFFER:
             data = msg.data
-
+        
         out = ofp_parser.OFPPacketOut(
-            datapath=dp, buffer_id=msg.buffer_id, in_port=msg.in_port,
-            actions=actions, data = data)
-        dp.send_msg(out)
-        """
+            datapath = dp, buffer_id = msg.buffer_id, in_port = msg.in_port,
+            actions = actions, data = data
+        )
 
-        return
+        dp.send_msg(out)
 
     def _update_hosts_list(self):
         """
