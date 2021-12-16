@@ -69,6 +69,38 @@ class SpanningTreeController(app_manager.RyuApp):
         
         datapath.send_msg(mod)
 
+    def rebuild_topo(self):
+        """
+        Update the topology.
+        """
+
+        # Flush all flow tables
+        for dp in self.datapath:
+            self.flush_flow_tables(self.datapath[dp])
+
+        # Fetch data
+        switch_list = copy.copy(get_switch(self, None))
+        links_list = copy.copy(get_link(self, None))
+
+        # List format
+        switchesDetails = [switch.to_dict() for switch in switch_list]
+        links = [(link.src.dpid,link.dst.dpid) for link in links_list]
+
+        # Save
+        self._update_hosts_list()
+        self.links = []
+        self.links = copy.copy(links)
+
+        # Mapping switches' ids and MAC addresses + ports
+        self._update_switch_mappings(switchesDetails)
+
+        # Map of links
+        self._update_link_map()
+
+        # Update topo and build minimal spanning tree
+        self.topology.fill_graph(len(self.switches), self.links)
+        self.topology.primMST()
+
     @set_ev_cls(event.EventSwitchEnter, MAIN_DISPATCHER)
     def switch_in_handler(self, ev):
         """
@@ -109,6 +141,64 @@ class SpanningTreeController(app_manager.RyuApp):
         self.topology.primMST()
 
         self.datapath.update({ev.switch.dp.id: ev.switch.dp})
+
+    @set_ev_cls(event.EventSwitchLeave, MAIN_DISPATCHER)
+    def switch_leave_handler(self, ev):
+        """
+        Handler when a switch leave the topology.
+
+        Argument:
+        ---------
+        - `ev`: Event generated when the switch contacted the controller.
+        """
+
+        print("Switch {} down".format(ev.switch.dp.id))
+
+        self.rebuild_topo()
+    
+    @set_ev_cls(event.EventSwitchReconnected, MAIN_DISPATCHER)
+    def switch_reconnect_handler(self, ev):
+        """
+        Handler when a switch reconnects the topology.
+
+        Argument:
+        ---------
+        - `ev`: Event generated when the switch contacted the controller.
+        """
+
+        print("Switch {} reconnects".format(ev.switch.dp.id))
+
+        self.rebuild_topo()
+
+        self.datapath.update({ev.switch.dp.id: ev.switch.dp})
+
+    @set_ev_cls(event.EventPortDelete, MAIN_DISPATCHER)
+    def port_delete_handler(self, ev):
+        """
+        Handler when a port is deleted.
+
+        Argument:
+        ---------
+        - `ev`: Event generated when the switch contacted the controller.
+        """
+
+        print("Port {} down".format(ev.port.name))
+
+        self.rebuild_topo()
+
+    @set_ev_cls(event.EventLinkDelete, MAIN_DISPATCHER)
+    def link_delete_handler(self, ev):
+        """
+        Handler when a link goes down.
+
+        Argument:
+        ---------
+        - `ev`: Event generated.
+        """
+
+        print("Link between {} and {} down".format(ev.link.src, ev.link.dst))
+
+        self.rebuild_topo()
 
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def packet_in_handler(self, ev):
@@ -489,6 +579,23 @@ class SpanningTreeController(app_manager.RyuApp):
                     stack.append((n, path + [n]))
 
         return validPaths
+
+    def flush_flow_tables(self, datapath):
+        """
+        Flush flow table of the given switch.
+
+        Argument:
+        ---------
+        - `datapath`: Datapath of the switch we want to flush.
+        """
+
+        mod = datapath.ofproto_parser.OFPFlowMod(
+            datapath = datapath,
+            match    = datapath.ofproto_parser.OFPMatch(),
+            command  = datapath.ofproto.OFPFC_DELETE
+        )
+        
+        datapath.send_msg(mod)
 
 def _convert_port_description_to_dict(portsDesc: list) -> dict:
     """
