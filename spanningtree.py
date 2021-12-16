@@ -1,3 +1,5 @@
+# Authors: Maxime Goffart (180521) and Olivier Joris (182113)
+
 from ryu import ofproto
 from ryu.base import app_manager
 from ryu.controller import ofp_event
