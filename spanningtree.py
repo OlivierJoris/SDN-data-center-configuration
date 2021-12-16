@@ -90,7 +90,6 @@ class SpanningTreeController(app_manager.RyuApp):
         switches = [switch.dp.id for switch in switch_list]
         switchesDetails = [switch.to_dict() for switch in switch_list]
         links = [(link.src.dpid,link.dst.dpid) for link in links_list]
-        linksDetails = [link.to_dict() for link in links_list]
 
         # Save
         self._update_hosts_list()
@@ -109,11 +108,7 @@ class SpanningTreeController(app_manager.RyuApp):
         self.topology.fill_graph(len(self.switches), self.links)
         self.topology.primMST()
 
-        # Check for id of switch 0
-        if ev.switch.dp.id == self.topology.s0ID:
-            self.datapath.update({0: ev.switch.dp})
-        else:
-            self.datapath.update({ev.switch.dp.id: ev.switch.dp})
+        self.datapath.update({ev.switch.dp.id: ev.switch.dp})
 
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def packet_in_handler(self, ev):
@@ -193,16 +188,8 @@ class SpanningTreeController(app_manager.RyuApp):
         src = eth.src
         dst = eth.dst
 
-        # Check for id of s0
         switchIdInt = dp.id
-        if dp.id == self.topology.s0ID:
-            switchIdInt = 0
-
-        switchIdString = dp.id
-        if dp.id == self.topology.s0ID:
-            switchIdString = '0000000000000000'
-        else:
-            switchIdString = _convert_int_to_switch_id(dp.id)
+        switchIdString = _convert_int_to_switch_id(dp.id)
         
         # Get neighbors of switch in spanning tree
         neighbors = self.topology.findNeigborSwitches(switchIdInt)
@@ -210,7 +197,10 @@ class SpanningTreeController(app_manager.RyuApp):
         # Find the ports on which to send the packet to reach the neighbors
         listPorts = []
         for neighbor in neighbors:
-            neighborID = _convert_int_to_switch_id(neighbor)
+            tmpNeighbor = neighbor
+            if tmpNeighbor == 0:
+                tmpNeighbor = self.topology.s0ID
+            neighborID = _convert_int_to_switch_id(tmpNeighbor)
             port = self.linksMap[switchIdString][neighborID]
             listPorts.append(port)
         
@@ -326,10 +316,7 @@ class SpanningTreeController(app_manager.RyuApp):
             if msg.buffer_id == ofp.OFP_NO_BUFFER:
                 data = msg.data
 
-            if dp.id == self.topology.s0ID:
-                action = [ofp_parser.OFPActionOutput(int(self.linksMap[_convert_int_to_switch_id(0)][paths[0][1]]))]
-            else:
-                action = [ofp_parser.OFPActionOutput(int(self.linksMap[_convert_int_to_switch_id(dp.id)][paths[0][1]]))]
+            action = [ofp_parser.OFPActionOutput(int(self.linksMap[_convert_int_to_switch_id(dp.id)][paths[0][1]]))]
 
             out = ofp_parser.OFPPacketOut(
                 datapath = dp, buffer_id = msg.buffer_id, in_port = msg.in_port,
@@ -375,11 +362,7 @@ class SpanningTreeController(app_manager.RyuApp):
         
         for sw in range(len(switchDetails)):
             ports = _convert_port_description_to_dict(switchDetails[sw]['ports'])
-            # Check for id of s0
-            if int(switchDetails[sw]['dpid'], 16) == self.topology.s0ID:
-                self.switchesMapping.update({'0000000000000000': ports})
-            else:
-                self.switchesMapping.update({switchDetails[sw]['dpid']: ports})
+            self.switchesMapping.update({switchDetails[sw]['dpid']: ports})
 
     def _update_link_map(self):
         """
@@ -424,17 +407,19 @@ class SpanningTreeController(app_manager.RyuApp):
             destID = link['dst']['dpid']
             sourceOutPort = link['src']['port_no']
 
-            if int(sourceID, 16) == s0ID:
-                sourceID = '0000000000000000'
-            if int(destID, 16) == s0ID:
-                destID = '0000000000000000'
+            sourceIDInt = int(sourceID, 16)
+            if sourceIDInt > len(self.switches):
+                sourceIDInt = 0
 
-            sources[int(sourceID, 16)] = sourceID
-            maps[int(sourceID, 16)].update({destID: sourceOutPort})
+            sources[sourceIDInt] = sourceID
+            maps[sourceIDInt].update({destID: sourceOutPort})
 
         # Group dictionaries by source switch
         for source in sources:
-            self.linksMap.update({source: maps[int(source, 16)]})
+            sourceID = int(source, 16)
+            if sourceID > len(self.switches):
+                sourceID = 0
+            self.linksMap.update({source: maps[sourceID]})
     
     def _is_edge_switch(self, switchID: str):
         """
@@ -494,14 +479,16 @@ class SpanningTreeController(app_manager.RyuApp):
             neighbors = self.topology.findNeigborSwitches(int(last, 16))
 
             for neighbor in neighbors:
-                n = _convert_int_to_switch_id(neighbor)
+                tmpNeighbor = neighbor
+                if tmpNeighbor == 0:
+                    tmpNeighbor = self.topology.s0ID
+                n = _convert_int_to_switch_id(tmpNeighbor)
                 if n == switchDST:
                     validPaths.append(path + [n])
                 elif n not in path: # prevent loop
                     stack.append((n, path + [n]))
 
         return validPaths
-
 
 def _convert_port_description_to_dict(portsDesc: list) -> dict:
     """
@@ -738,6 +725,9 @@ class Topology:
         """
 
         neighbors = []
+
+        if switchID > self.nbElements:
+            switchID = 0
 
         tree = self.primMST()
 
