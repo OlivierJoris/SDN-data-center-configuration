@@ -31,9 +31,9 @@ class SpanningTreeController(app_manager.RyuApp):
         self.hostSwitchMapping = {} # Mapping between the id of a host and the id of the switch to which its is connected.
         self.switches = []          # IDs of the switches
         self.switchesMapping = {}   # Mapping between the switches' ids and mac addresses + ports
-        self.datapath = {}          # Mapping between switch ID (int) and associated datapath object.
+        self.datapath = {}          # Mapping between switch ID (int) and associated datapath object
         self.links = []             # List of links
-        self.linksMap = {}          # Mapping between a switch id and the id of a neighbor switch with the port to reach it.
+        self.linksMap = {}          # Mapping between a switch id and the id of a neighbor switch with the port to reach it
         self.topology = Topology(0) # Represents the topology
     
     def add_flow(self, datapath, priority, match, actions, buffer_id=None):
@@ -71,6 +71,11 @@ class SpanningTreeController(app_manager.RyuApp):
     def switch_in_handler(self, ev):
         """
         Handler when a switch enters the topology.
+
+        Argument:
+        ---------
+        - `ev`: Event generated when the switch contacted the controller.
+
         Partially based on https://github.com/Ehsan70/RyuApps/blob/master/TopoDiscoveryInRyu.md
             and https://sdn-lab.com/2014/12/31/topology-discovery-with-ryu/
         """
@@ -96,52 +101,31 @@ class SpanningTreeController(app_manager.RyuApp):
         self._update_switch_mappings(switchesDetails)
 
         # Map of links
-        self._update_link_map(links, linksDetails)
+        self._update_link_map()
 
         # Update topo and build minimal spanning tree
         self.topology.fill_graph(len(self.switches), self.links)
         self.topology.primMST()
 
+        # Check for id of switch 0
         if ev.switch.dp.id == self.topology.s0ID:
             self.datapath.update({0: ev.switch.dp})
         else:
             self.datapath.update({ev.switch.dp.id: ev.switch.dp})
 
-        print("Datapath list")
-        for dp in self.datapath:
-            print("{} -> {}".format(dp, self.datapath[dp]))
-
-    @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
-    def switch_features_handler(self, ev):
-        """
-        Handler when the controller receives the response to the
-        features request for a switch.
-
-        Source: Official book (page 8)
-        """
-
-        datapath = ev.msg.datapath
-        ofproto = datapath.ofproto
-        parser = datapath.ofproto_parser
-
-        # Set the table-miss flow entry inside the switch. Source of issues
-        #match = parser.OFPMatch()
-        #actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER)]
-        #self.add_flow(datapath, 0, match, actions)
-
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def packet_in_handler(self, ev):
         """
         Handler called when a packet arrives at the controller.
+
+        Argument:
+        ---------
+        - `ev`: Event generated.
         """
 
-        # Update the list of hosts
+        # Update the list of hosts and map of links
         self._update_hosts_list()
-
-        links_list = copy.copy(get_link(self, None))
-        linksDetails = [link.to_dict() for link in links_list]
-        links = [(link.src.dpid,link.dst.dpid) for link in links_list]
-        self._update_link_map(links, linksDetails)
+        self._update_link_map()
 
         msg = ev.msg
         dp = msg.datapath
@@ -158,19 +142,22 @@ class SpanningTreeController(app_manager.RyuApp):
         if ((src in self.hosts) and (dst in self.hosts)) or ((src in self.hosts) and (dst == MAC_BROADCAST)):
             print("Packet from {} to {} received at sw {} port {}".format(src, dst, dp.id, msg.in_port))
 
-        # If the destination is broadcast (e.g. in the case of ARP request) and the src is one of the host,
-        # need to add a flow to go back to the host and broadcast on all the ports of the switch
-        # connected to the spanning tree
+        """
+        If the destination is broadcast (e.g. in the case of ARP request) and
+        the src is one of the host, need to broadcast on all the ports of the
+        switch connected to the spanning tree
+        """
         if src in self.hosts and dst == MAC_BROADCAST:
             self.flood_neigbors(ev)
             return
 
+        """
+        If the source and the destination are hosts, need to compute a path
+        between them and set flows along the path.
+        """
         if (src in self.hosts) and (dst in self.hosts):
             paths = self.compute_paths(src, dst)
-            print("")
-
             self.add_flows_path(ev, paths)
-            print("")
 
             return
 
@@ -187,9 +174,11 @@ class SpanningTreeController(app_manager.RyuApp):
         - `ev`: Event received in the handler.
         """
 
-        # If the destination is broadcast (e.g. in the case of ARP request) and
-        # the src is one of the host, need to broadcast on all the ports of the
-        # switch connected to the spanning tree
+        """
+        If the destination is broadcast (e.g. in the case of ARP request) and
+        the src is one of the host, need to broadcast on all the ports of the
+        switch connected to the spanning tree
+        """
 
         msg = ev.msg
         dp = msg.datapath
@@ -202,9 +191,7 @@ class SpanningTreeController(app_manager.RyuApp):
         src = eth.src
         dst = eth.dst
 
-        print("New flow for src in hosts and dst = broadcast")
-
-        # Flow that flood to neigbors of the switch in the spanning tree. 
+        # Check for id of s0
         switchIdInt = dp.id
         if dp.id == self.topology.s0ID:
             switchIdInt = 0
@@ -215,18 +202,17 @@ class SpanningTreeController(app_manager.RyuApp):
         else:
             switchIdString = _convert_int_to_switch_id(dp.id)
         
-        # Get neighbors of switch in spanning tree.
+        # Get neighbors of switch in spanning tree
         neighbors = self.topology.findNeigborSwitches(switchIdInt)
-        print("Neighbors = {}".format(neighbors))
 
-        # Find the ports on which to send the packet to reach the neighbors.
+        # Find the ports on which to send the packet to reach the neighbors
         listPorts = []
         for neighbor in neighbors:
             neighborID = _convert_int_to_switch_id(neighbor)
             port = self.linksMap[switchIdString][neighborID]
             listPorts.append(port)
         
-        # If the switch is a edge switch, send on ports of hosts.
+        # If the switch is a edge switch, send on ports of hosts
         edge, maxN = self._is_edge_switch(switchIdString)
         if edge:
             portsUsed = []
@@ -237,20 +223,18 @@ class SpanningTreeController(app_manager.RyuApp):
                 if i not in portsUsed:
                     listPorts.append(str(i))
         
-        # Build actions: send on ports to reach neighbors.
+        # Build actions: send on ports to reach neighbors
         actions = []
         for port in listPorts:
             if int(port) == msg.in_port: # do not send back on the port on which the packet arrived
                 continue
-            print("Add flow to send packet on all allowed port: packet_src={} flow_dst={} action_port={}".format(src, dst, port))
             actions.append(ofp_parser.OFPActionOutput(int(port)))
-        print("")
 
-        # Add flow
+        # Add flows
         match = ofp_parser.OFPMatch(dl_src = src, dl_dst = dst, in_port = msg.in_port)
         self.add_flow(dp, 1, match, actions)
 
-        # Send OFPPacketOut for the current packet.
+        # Need to send current packet
         data = None
         if msg.buffer_id == ofp.OFP_NO_BUFFER:
             data = msg.data
@@ -270,11 +254,8 @@ class SpanningTreeController(app_manager.RyuApp):
         Arguments:
         ----------
         - `ev`: Event receives in the handler.
-        - `paths`: List of paths on which to set the flaws.
+        - `paths`: List of paths on which to set the flows.
         """
-
-        print("Add flow path")
-        print("path = {}".format(paths))
 
         msg = ev.msg
         dp = msg.datapath
@@ -287,7 +268,7 @@ class SpanningTreeController(app_manager.RyuApp):
         src = eth.src
         dst = eth.dst
 
-        # Base case: source and destination are connected to the same switch.
+        # Base case: source and destination are connected to the same switch
         if len(paths) == 1 and len(paths[0]) == 1:
 
             match = ofp_parser.OFPMatch(dl_src = src, dl_dst = dst, in_port = msg.in_port)
@@ -295,8 +276,6 @@ class SpanningTreeController(app_manager.RyuApp):
 
             # Add flow
             self.add_flow(dp, 2, match, action)
-
-            print("src = {} | dst = {} | src_out_port = {}".format(src, dst, int(self.hostSwitchMapping[dst]['port'])))
 
             # Need to send current packet
             data = None
@@ -310,20 +289,16 @@ class SpanningTreeController(app_manager.RyuApp):
 
             dp.send_msg(out)
         
-        # If source and destination are connected to different switches.
+        # If source and destination are connected to different switches
         elif len(paths) >= 1 and len(paths[0]) > 1:
-            print("Link map (switch id -> {neighbor switch id: port of source to reach neigbor})")
-            for source in self.linksMap:
-                print(str(source) + " -> " + str(self.linksMap[source]))
             # Should have only one path due to minimal spanning tree
             in_port = msg.in_port
 
             for index in range(len(paths[0])):
-                print("Path - step {}".format(index))
                 # 1) Config match rule
                 match = ofp_parser.OFPMatch(dl_src = src, dl_dst = dst, in_port = in_port)
 
-                # 2) Get port on which to reach next switch (or destination host)
+                # 2) Get port on which to reach next switch (or destination host if end of path)
                 currSwitch = paths[0][index]
                 port = 0
                 if index == len(paths[0]) - 1: # The next hop is the host destination
@@ -335,11 +310,9 @@ class SpanningTreeController(app_manager.RyuApp):
                 # 3) Config action list
                 action = [ofp_parser.OFPActionOutput(port)]
 
-                # 4) Add flow (by getting datapath of switch)
+                # 4) Add flow using datapath of current switch in path
                 currDP = self.datapath[int(currSwitch, 16)]
                 self.add_flow(currDP, 2, match, action)
-
-                print("Add flow in {} for src = {} | dst = {} | out_port = {}".format(currDP.id, src, dst, port))
 
                 # 5) Update in_port
                 if index < len(paths[0]) - 1:
@@ -367,7 +340,7 @@ class SpanningTreeController(app_manager.RyuApp):
 
     def _update_hosts_list(self):
         """
-        Updates the list of MAC addresses of the hosts and the mapping
+        Update the list of MAC addresses of the hosts and the mapping
         between the hosts' ids and the id of the switch to which each host
         is connected.
         """
@@ -389,7 +362,7 @@ class SpanningTreeController(app_manager.RyuApp):
     
     def _update_switch_mappings(self, switchDetails: list):
         """
-        Updates the mappings between the switches ids and ports' descriptions.
+        Update the mappings between the switches ids and ports' descriptions.
 
         Arguments:
         ----------
@@ -405,22 +378,24 @@ class SpanningTreeController(app_manager.RyuApp):
                 self.switchesMapping.update({'0000000000000000': ports})
             else:
                 self.switchesMapping.update({switchDetails[sw]['dpid']: ports})
-        
-        print("Mapping between switch id and ports desc. (switch id -> {port id : port mac})")
-        for switch in self.switchesMapping:
-            print(str(switch) + " -> " + str(self.switchesMapping[switch]))
 
-    def _update_link_map(self, links: list, linksDetails: list):
+    def _update_link_map(self):
         """
-        Updates the mapping between a switch id and the id of a neighbor switch and the port to reach it.
-
-        Arguments:
-        ----------
-        - `links`: List of links.
-        - `linksDetials`: Details about the links.
+        Update the mapping between a switch id and the id of a neighbor switch and the port to reach it.
         """
 
-        # Find max value because switch s0 has an id randomly generated by Ryu which has the maximum value.
+        # Fetch data
+        links_list = copy.copy(get_link(self, None))
+        links = [(link.src.dpid,link.dst.dpid) for link in links_list]
+        linksDetails = [link.to_dict() for link in links_list]
+        # Save
+        self.links = []
+        self.links = copy.copy(links)
+
+        """
+        Find max value because switch s0 has an id randomly generated
+        by Ryu which has the maximum value
+        """
         s0ID = 1
         for link in links:
             if len(link) != 2:
@@ -486,8 +461,8 @@ class SpanningTreeController(app_manager.RyuApp):
     
     def compute_paths(self, src: str, dst: str) -> list:
         """
-        Computes paths between source `src` and destination `dst`.
-        The returned paths are limited to links in the spanning tree.
+        Compute paths between source `src` and destination `dst`.
+        The returned paths  arelimited to links in the spanning tree.
 
         Arguments:
         ----------
@@ -499,8 +474,6 @@ class SpanningTreeController(app_manager.RyuApp):
         - Paths between 2 hosts where a path is a list of switch ids (list of str).
         """
 
-        print("Computing path btw {} and {}".format(src, dst))
-
         # Get switch to which src and dst are connected
         switchSRC = self.hostSwitchMapping[src]['dpid']
         switchDST = self.hostSwitchMapping[dst]['dpid']
@@ -509,8 +482,8 @@ class SpanningTreeController(app_manager.RyuApp):
         if switchSRC == switchDST:
             return [[switchSRC]] # Equivalently switchDST
 
-        # Compute path using DFS
-        paths = []
+        # Compute paths using DFS
+        validPaths = []
         stack = [(switchSRC, [switchSRC])]
         while stack:
             _, path = stack.pop()
@@ -521,19 +494,16 @@ class SpanningTreeController(app_manager.RyuApp):
             for neighbor in neighbors:
                 n = _convert_int_to_switch_id(neighbor)
                 if n == switchDST:
-                    paths.append(path + [n])
+                    validPaths.append(path + [n])
                 elif n not in path: # prevent loop
                     stack.append((n, path + [n]))
 
-        print("Paths between {} and {}".format(src, dst))
-        print(paths)
-
-        return paths
+        return validPaths
 
 
 def _convert_port_description_to_dict(portsDesc: list) -> dict:
     """
-    Converts the description of the ports of a switch to a dict.
+    Convert the description of the ports of a switch to a dict.
 
     Arguments:
     ----------
@@ -573,14 +543,14 @@ def _convert_int_to_switch_id(integer: int) -> str:
 
 class Topology:
     """
-    Represents the topology of the network by an undirected graph where
+    Represent the topology of the network by an undirected graph where
     the vertices of the graph are the network elements (switches)
     and the edges are the links between the elements.
     """
 
     def __init__(self, nbElements: int):
         """
-        Initializes the object.
+        Initialize the object.
 
         Arguments:
         ----------
@@ -592,7 +562,7 @@ class Topology:
 
     def _init_graph(self, size: int=0):
         """
-        Initializes the graph with a given size.
+        Initialize the graph with a given size.
 
         Arguments:
         ----------
@@ -609,7 +579,7 @@ class Topology:
 
     def print(self):
         """
-        Prints the graph.
+        Print the graph.
         """
 
         print("Topology: size {}".format(self.nbElements))
@@ -624,7 +594,7 @@ class Topology:
     
     def fill_graph(self, nbElements: int, links: list):
         """
-        Fills the graph of `nbElements` network elements with the given
+        Fill the graph of `nbElements` network elements with the given
         `links`.
 
         Arguments:
@@ -638,7 +608,10 @@ class Topology:
         self.nbElements = nbElements
         self._init_graph(self.nbElements)
 
-        # Find max value because switch s0 has an id randomly generated by Ryu which has the maximum value.
+        """
+        Find max value because switch s0 has an id randomly generated
+        by Ryu which has the maximum value
+        """
         s0ID = 1
         for link in links:
             if len(link) != 2:
@@ -677,7 +650,7 @@ class Topology:
     
     def printMST(self, parent: list):
         """
-        Prints the spanning tree.
+        Print the spanning tree.
 
         Argument:
         ---------
@@ -694,7 +667,7 @@ class Topology:
  
     def minKey(self, key: list, mstSet: list) -> int:
         """
-        Finds vertices with minimal cost.
+        Find vertices with minimal cost.
 
         Return:
         -------
@@ -715,7 +688,7 @@ class Topology:
  
     def primMST(self) -> list:
         """
-        Computes the minimum spanning tree with Prim's algorithm.
+        Compute the minimum spanning tree with Prim's algorithm.
 
         Return:
         -------
@@ -741,8 +714,6 @@ class Topology:
                 if self.graph[u][v] > 0 and mstSet[v] == False and key[v] > self.graph[u][v]:
                         key[v] = self.graph[u][v]
                         parent[v] = u
- 
-        #self.printMST(parent)
         
         tree = []
         for i in range(1, self.nbElements):
