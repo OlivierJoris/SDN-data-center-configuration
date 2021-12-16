@@ -116,10 +116,10 @@ class SpanningTreeController(app_manager.RyuApp):
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
 
-        # Set the table-miss flow entry inside the switch.
-        match = parser.OFPMatch()
-        actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER)]
-        self.add_flow(datapath, 0, match, actions)
+        # Set the table-miss flow entry inside the switch. Source of issues
+        #match = parser.OFPMatch()
+        #actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER)]
+        #self.add_flow(datapath, 0, match, actions)
 
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def packet_in_handler(self, ev):
@@ -144,6 +144,9 @@ class SpanningTreeController(app_manager.RyuApp):
 
         if ((src in self.hosts) and (dst in self.hosts)) or ((src in self.hosts) and (dst == MAC_BROADCAST)):
             print("Packet from {} to {} received at sw {} port {}".format(src, dst, dp.id, msg.in_port))
+            print("host -> switch id & port")
+            for host in self.hostSwitchMapping:
+                print("{} -> {}".format(host, self.hostSwitchMapping[host]))
 
         # If the destination is broadcast (e.g. in the case of ARP request) and the src is one of the host,
         # need to add a flow to go back to the host and broadcast on all the ports of the switch
@@ -153,8 +156,12 @@ class SpanningTreeController(app_manager.RyuApp):
             return
 
         if (src in self.hosts) and (dst in self.hosts):
-            self.compute_paths(src, dst)
+            paths = self.compute_paths(src, dst)
             print("")
+
+            self.add_flows_path(ev, paths)
+            print("")
+
             return
 
         return
@@ -167,12 +174,12 @@ class SpanningTreeController(app_manager.RyuApp):
 
         Argument:
         ---------
-        - `ev`: Event that generated the request to flood.
+        - `ev`: Event received in the handler.
         """
 
-        # If the destination is broadcast (e.g. in the case of ARP request) and the src is one of the host,
-        # need to add a flow to go back to the host and broadcast on all the ports of the switch
-        # connected to the spanning tree
+        # If the destination is broadcast (e.g. in the case of ARP request) and
+        # the src is one of the host, need to broadcast on all the ports of the
+        # switch connected to the spanning tree
 
         msg = ev.msg
         dp = msg.datapath
@@ -186,11 +193,6 @@ class SpanningTreeController(app_manager.RyuApp):
         dst = eth.dst
 
         print("New flow for src in hosts and dst = broadcast")
-        # Flow to go back to the host.
-        match = ofp_parser.OFPMatch(dl_dst = src)
-        actions = [ofp_parser.OFPActionOutput(msg.in_port)]
-        self.add_flow(dp, 1, match, actions)
-        print("Add flow to go back to host: flow_dst={} action_port={}".format(src, msg.in_port))
 
         # Flow that flood to neigbors of the switch in the spanning tree. 
         switchIdInt = dp.id
@@ -201,7 +203,7 @@ class SpanningTreeController(app_manager.RyuApp):
         if dp.id == self.topology.s0ID:
             switchIdString = '0000000000000000'
         else:
-            switchIdString = convert_int_to_switch_id(dp.id)
+            switchIdString = _convert_int_to_switch_id(dp.id)
         
         # Get neighbors of switch in spanning tree.
         neighbors = self.topology.findNeigborSwitches(switchIdInt)
@@ -210,7 +212,7 @@ class SpanningTreeController(app_manager.RyuApp):
         # Find the ports on which to send the packet to reach the neighbors.
         listPorts = []
         for neighbor in neighbors:
-            neighborID = convert_int_to_switch_id(neighbor)
+            neighborID = _convert_int_to_switch_id(neighbor)
             port = self.linksMap[switchIdString][neighborID]
             listPorts.append(port)
         
@@ -221,7 +223,7 @@ class SpanningTreeController(app_manager.RyuApp):
             keys = self.linksMap[switchIdString].values()
             for key in keys:
                 portsUsed.append(int(key))
-            for i in range(maxN):
+            for i in range(1, maxN+1):
                 if i not in portsUsed:
                     listPorts.append(str(i))
         
@@ -235,7 +237,7 @@ class SpanningTreeController(app_manager.RyuApp):
         print("")
 
         # Add flow
-        match = ofp_parser.OFPMatch(dl_src = src, dl_dst = dst)
+        match = ofp_parser.OFPMatch(dl_src = src, dl_dst = dst, in_port = msg.in_port)
         self.add_flow(dp, 1, match, actions)
 
         # Send OFPPacketOut for the current packet.
@@ -249,6 +251,43 @@ class SpanningTreeController(app_manager.RyuApp):
         )
 
         dp.send_msg(out)
+
+    def add_flows_path(self, ev, paths: list):
+        """
+        Add flows along a path. Used when the source and the destination of a packet
+        are hosts inside the network.
+
+        Arguments:
+        ----------
+        - `ev`: Event receives in the handler.
+        - `paths`: List of paths on which to set the flaws.
+        """
+
+        print("Add flow path")
+        print("path = {}".format(paths))
+
+        msg = ev.msg
+        dp = msg.datapath
+        ofp = dp.ofproto
+        ofp_parser = dp.ofproto_parser
+
+        pkt = packet.Packet(msg.data)
+        eth = pkt.get_protocol(ethernet.ethernet)
+
+        src = eth.src
+        dst = eth.dst
+
+        # Base case: source and destination are connected to the same switch.
+        if len(paths) == 1 and len(paths[0]) == 1:
+
+            match = ofp_parser.OFPMatch(dl_src = src, dl_dst = dst, in_port = msg.in_port)
+            action = [ofp_parser.OFPActionOutput(int(self.hostSwitchMapping[dst]['port']))]
+
+            self.add_flow(dp, 2, match, action)
+
+            print("src = {} | dst = {} | src_out_port = {}".format(src, dst, int(self.hostSwitchMapping[dst]['port'])))
+
+        return
 
     def _update_hosts_list(self):
         """
@@ -408,10 +447,10 @@ class SpanningTreeController(app_manager.RyuApp):
             neighbors = self.topology.findNeigborSwitches(int(last, 16))
 
             for neighbor in neighbors:
-                n = convert_int_to_switch_id(neighbor)
+                n = _convert_int_to_switch_id(neighbor)
                 if n == switchDST:
                     paths.append(path + [n])
-                elif n not in path: # prevent loop by going back to last switch
+                elif n not in path: # prevent loop
                     stack.append((n, path + [n]))
 
         print("Paths between {} and {}".format(src, dst))
@@ -439,7 +478,7 @@ def _convert_port_description_to_dict(portsDesc: list) -> dict:
     
     return ports
 
-def convert_int_to_switch_id(integer: int) -> str:
+def _convert_int_to_switch_id(integer: int) -> str:
     """
     Convert an integer in base 10 to a switch id as a string.
 
