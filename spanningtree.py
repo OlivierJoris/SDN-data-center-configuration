@@ -31,7 +31,7 @@ class SpanningTreeController(app_manager.RyuApp):
         self.hostSwitchMapping = {} # Mapping between the id of a host and the id of the switch to which its is connected.
         self.switches = []          # IDs of the switches
         self.switchesMapping = {}   # Mapping between the switches' ids and mac addresses + ports
-        self.dataflows = {}         # Mapping between switch ID (int) and associated dataflow object.
+        self.datapath = {}          # Mapping between switch ID (int) and associated datapath object.
         self.links = []             # List of links
         self.linksMap = {}          # Mapping between a switch id and the id of a neighbor switch with the port to reach it.
         self.topology = Topology(0) # Represents the topology
@@ -89,7 +89,6 @@ class SpanningTreeController(app_manager.RyuApp):
         self._update_hosts_list()
         self.switches = []
         self.switches = copy.copy(switches)
-        self.dataflows.update({ev.switch.dp.id: ev.switch.dp})
         self.links = []
         self.links = copy.copy(links)
 
@@ -102,6 +101,15 @@ class SpanningTreeController(app_manager.RyuApp):
         # Update topo and build minimal spanning tree
         self.topology.fill_graph(len(self.switches), self.links)
         self.topology.primMST()
+
+        if ev.switch.dp.id == self.topology.s0ID:
+            self.datapath.update({0: ev.switch.dp})
+        else:
+            self.datapath.update({ev.switch.dp.id: ev.switch.dp})
+
+        print("Datapath list")
+        for dp in self.datapath:
+            print("{} -> {}".format(dp, self.datapath[dp]))
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def switch_features_handler(self, ev):
@@ -130,6 +138,11 @@ class SpanningTreeController(app_manager.RyuApp):
         # Update the list of hosts
         self._update_hosts_list()
 
+        links_list = copy.copy(get_link(self, None))
+        linksDetails = [link.to_dict() for link in links_list]
+        links = [(link.src.dpid,link.dst.dpid) for link in links_list]
+        self._update_link_map(links, linksDetails)
+
         msg = ev.msg
         dp = msg.datapath
 
@@ -144,9 +157,6 @@ class SpanningTreeController(app_manager.RyuApp):
 
         if ((src in self.hosts) and (dst in self.hosts)) or ((src in self.hosts) and (dst == MAC_BROADCAST)):
             print("Packet from {} to {} received at sw {} port {}".format(src, dst, dp.id, msg.in_port))
-            print("host -> switch id & port")
-            for host in self.hostSwitchMapping:
-                print("{} -> {}".format(host, self.hostSwitchMapping[host]))
 
         # If the destination is broadcast (e.g. in the case of ARP request) and the src is one of the host,
         # need to add a flow to go back to the host and broadcast on all the ports of the switch
@@ -283,9 +293,75 @@ class SpanningTreeController(app_manager.RyuApp):
             match = ofp_parser.OFPMatch(dl_src = src, dl_dst = dst, in_port = msg.in_port)
             action = [ofp_parser.OFPActionOutput(int(self.hostSwitchMapping[dst]['port']))]
 
+            # Add flow
             self.add_flow(dp, 2, match, action)
 
             print("src = {} | dst = {} | src_out_port = {}".format(src, dst, int(self.hostSwitchMapping[dst]['port'])))
+
+            # Need to send current packet
+            data = None
+            if msg.buffer_id == ofp.OFP_NO_BUFFER:
+                data = msg.data
+            
+            out = ofp_parser.OFPPacketOut(
+                datapath = dp, buffer_id = msg.buffer_id, in_port = msg.in_port,
+                actions = action, data = data
+            )
+
+            dp.send_msg(out)
+        
+        # If source and destination are connected to different switches.
+        elif len(paths) >= 1 and len(paths[0]) > 1:
+            print("Link map (switch id -> {neighbor switch id: port of source to reach neigbor})")
+            for source in self.linksMap:
+                print(str(source) + " -> " + str(self.linksMap[source]))
+            # Should have only one path due to minimal spanning tree
+            in_port = msg.in_port
+
+            for index in range(len(paths[0])):
+                print("Path - step {}".format(index))
+                # 1) Config match rule
+                match = ofp_parser.OFPMatch(dl_src = src, dl_dst = dst, in_port = in_port)
+
+                # 2) Get port on which to reach next switch (or destination host)
+                currSwitch = paths[0][index]
+                port = 0
+                if index == len(paths[0]) - 1: # The next hop is the host destination
+                    port = int(self.hostSwitchMapping[dst]['port'])
+                else: # The next hop is the next switch in the path
+                    nextSwitch = paths[0][index+1]
+                    port = int(self.linksMap[currSwitch][nextSwitch])
+
+                # 3) Config action list
+                action = [ofp_parser.OFPActionOutput(port)]
+
+                # 4) Add flow (by getting datapath of switch)
+                currDP = self.datapath[int(currSwitch, 16)]
+                self.add_flow(currDP, 2, match, action)
+
+                print("Add flow in {} for src = {} | dst = {} | out_port = {}".format(currDP.id, src, dst, port))
+
+                # 5) Update in_port
+                if index < len(paths[0]) - 1:
+                    nextSwitch = paths[0][index+1]
+                    in_port = int(self.linksMap[nextSwitch][currSwitch])
+
+            # Need to send current packet to next hop
+            data = None
+            if msg.buffer_id == ofp.OFP_NO_BUFFER:
+                data = msg.data
+
+            if dp.id == self.topology.s0ID:
+                action = [ofp_parser.OFPActionOutput(int(self.linksMap[_convert_int_to_switch_id(0)][paths[0][1]]))]
+            else:
+                action = [ofp_parser.OFPActionOutput(int(self.linksMap[_convert_int_to_switch_id(dp.id)][paths[0][1]]))]
+
+            out = ofp_parser.OFPPacketOut(
+                datapath = dp, buffer_id = msg.buffer_id, in_port = msg.in_port,
+                actions = action, data = data
+            )
+
+            dp.send_msg(out)
 
         return
 
@@ -382,10 +458,6 @@ class SpanningTreeController(app_manager.RyuApp):
         # Group dictionaries by source switch
         for source in sources:
             self.linksMap.update({source: maps[int(source, 16)]})
-        
-        print("Link map (switch id -> {neighbor switch id: port of source to reach neigbor})")
-        for source in self.linksMap:
-            print(str(source) + " -> " + str(self.linksMap[source]))
     
     def _is_edge_switch(self, switchID: str):
         """
