@@ -65,7 +65,7 @@ If the source and the destination are both hosts, we compute a path between them
 \section{Tests}
 
 \subsection{Spanning Tree Controller}
-\paragraph{}If we ping 10 times each host from \texttt{h0}, we obtained the following results:
+\paragraph{}If we ping 10 times each host from \texttt{h0}, we obtained the results of table \ref{table:STCPings}. The simple commands used are available in the file \texttt{test\_spanning\_tree.sh}.
 \begin{table}[H]
 \centering
 \begin{tabular}{|l|l|l|l|}
@@ -88,6 +88,7 @@ H0-H14                                     & 716ms                              
 H0-H15                                     & 712ms                              & 248ms                              & 1456ms                                 \\ \hline
 \end{tabular}
 \caption{Results of 10 pings between each host and \texttt{h0}}
+\label{table:STCPings}
 \end{table}
 We can see that the first ping always take a lot of time. This is explained because the first ping we will have as consequence to send multiple packets to the controller. First, it will send packets to the controller related to the ARP request to learn the MAC address of the destination. Then, it will send packets to the controller related to the icmp messages which will require the computation of paths between the host and the destination. All the processing in the controller is done in Python which is well known to be a slow language. Furthermore, these tests were performed on Maxime's computer which had the vm lock with an execution cap at 10\% (see in section \ref{sec:feedback} the explanation).\\
 Yet, the other pings have a RTT around the mean value. The high values of MDEV are explained by the fact that the first ping take a lot of time thus it increases the values of MDEV.\\
