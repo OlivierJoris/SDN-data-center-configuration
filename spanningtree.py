@@ -79,26 +79,23 @@ class SpanningTreeController(app_manager.RyuApp):
             self.flush_flow_tables(self.datapath[dp])
 
         # Fetch data
-        switch_list = copy.copy(get_switch(self, None))
         links_list = copy.copy(get_link(self, None))
 
         # List format
-        switchesDetails = [switch.to_dict() for switch in switch_list]
         links = [(link.src.dpid,link.dst.dpid) for link in links_list]
 
         # Save
-        self._update_hosts_list()
         self.links = []
         self.links = copy.copy(links)
 
-        # Mapping switches' ids and MAC addresses + ports
-        self._update_switch_mappings(switchesDetails)
+        print("Rebuild topo")
+        print("Nb switches = {}".format(len(self.switches)))
 
-        # Map of links
-        self._update_link_map()
-
-        # Update topo and build minimal spanning tree
+        # Update topo and remove minimal spanning tree
         self.topology.fill_graph(len(self.switches), self.links)
+        self.topology.minimalST = None
+
+        self.topology.print()
 
     @set_ev_cls(event.EventSwitchEnter, MAIN_DISPATCHER)
     def switch_in_handler(self, ev):
@@ -734,18 +731,18 @@ class Topology:
             tree = primMST(graph)
 
             for i in range(len(tree)):
-                if len(tree[i]) != 2:
+                if len(tree[i]) != 2 or tree[i][0] == None or tree[i][1] == None:
                     continue
                 # Need to increase by 1 because s0 has id 1
                 tree[i][0]+=1
                 tree[i][1]+=1
-            
+
             self.minimalST = tree
 
         neighbors = []
 
         for link in self.minimalST:
-            if len(link) != 2:
+            if len(link) != 2 or link[0] == None or link[1] == None:
                 continue
             if link[0] == switchID:
                 neighbors.append(link[1])

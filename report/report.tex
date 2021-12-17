@@ -94,6 +94,10 @@ H1-H16                                     & 701ms                              
 We can see that the first ping always take a lot of time. This is explained because the first ping we will have as consequence to send multiple packets to the controller. First, it will send packets to the controller related to the ARP request to learn the MAC address of the destination. Then, it will send packets to the controller related to the icmp messages which will require the computation of paths between the host and the destination. All the processing in the controller is done in Python which is well known to be a slow language. Furthermore, these tests were performed on Maxime's computer which had the vm lock with an execution cap at 10\% (see in section \ref{sec:feedback} the explanation).\\
 Yet, the pings, after the first one of each test, have a RTT around the mean value. The high values of MDEV are explained by the fact that the first ping take a lot of time thus it increases the values of MDEV.\\
 Another reason for the high value is the fact that each link has a delay of 50ms as set in the Mininet topology provided. Finally, we should keep in mind that we are running in a virtual environment and not on physical devices thus the measurements are not the most precise. Also, real physical links would not have a delay of 50ms (except for very long distance).
+tree[i][0] == None or tree[i][1] == None
+\subsubsection{Tests when a switch/link fails}
+\paragraph{}First, we can try to ping \texttt{h5} from \texttt{h1} and \texttt{h15} from \texttt{h1}. Both pings work as expected. Now, let us simulate a switch failure by typing \texttt{switch s17 stop} in Mininet. Then, ping \texttt{h5} from \texttt{h1} and \texttt{h15} from \texttt{h1}. Both work because our controller react to the change of topology. Now, let us simulate the switch going back up by typing \texttt{switch s17 start} in Mininet and do the same 2 pings as before. Both work because our controller react to the change of topology.\\
+This simple test is available in the file \texttt{test\_spanning\_tree\_failure.sh}.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
