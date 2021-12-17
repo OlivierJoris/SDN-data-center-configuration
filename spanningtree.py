@@ -88,9 +88,6 @@ class SpanningTreeController(app_manager.RyuApp):
         self.links = []
         self.links = copy.copy(links)
 
-        print("Rebuild topo")
-        print("Nb switches = {}".format(len(self.switches)))
-
         # Update topo and remove minimal spanning tree
         self.topology.fill_graph(len(self.switches), self.links)
         self.topology.minimalST = None
@@ -147,8 +144,6 @@ class SpanningTreeController(app_manager.RyuApp):
         - `ev`: Event generated when the switch contacted the controller.
         """
 
-        print("Switch {} down".format(ev.switch.dp.id))
-
         self.rebuild_topo()
     
     @set_ev_cls(event.EventSwitchReconnected, MAIN_DISPATCHER)
@@ -160,8 +155,6 @@ class SpanningTreeController(app_manager.RyuApp):
         ---------
         - `ev`: Event generated when the switch contacted the controller.
         """
-
-        print("Switch {} reconnects".format(ev.switch.dp.id))
 
         self.rebuild_topo()
 
@@ -177,8 +170,6 @@ class SpanningTreeController(app_manager.RyuApp):
         - `ev`: Event generated when the switch contacted the controller.
         """
 
-        print("Port {} down".format(ev.port.name))
-
         self.rebuild_topo()
 
     @set_ev_cls(event.EventLinkDelete, MAIN_DISPATCHER)
@@ -190,8 +181,6 @@ class SpanningTreeController(app_manager.RyuApp):
         ---------
         - `ev`: Event generated.
         """
-
-        print("Link between {} and {} down".format(ev.link.src, ev.link.dst))
 
         self.rebuild_topo()
 
