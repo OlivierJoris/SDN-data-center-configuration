@@ -99,7 +99,6 @@ class SpanningTreeController(app_manager.RyuApp):
 
         # Update topo and build minimal spanning tree
         self.topology.fill_graph(len(self.switches), self.links)
-        self.topology.primMST()
 
     @set_ev_cls(event.EventSwitchEnter, MAIN_DISPATCHER)
     def switch_in_handler(self, ev):
@@ -138,7 +137,6 @@ class SpanningTreeController(app_manager.RyuApp):
 
         # Update topo and build minimal spanning tree
         self.topology.fill_graph(len(self.switches), self.links)
-        self.topology.primMST()
 
         self.datapath.update({ev.switch.dp.id: ev.switch.dp})
 
@@ -245,7 +243,6 @@ class SpanningTreeController(app_manager.RyuApp):
         if (src in self.hosts) and (dst in self.hosts):
             paths = self.compute_paths(src, dst)
             self.add_flows_path(ev, paths)
-
             return
 
         return
@@ -282,15 +279,12 @@ class SpanningTreeController(app_manager.RyuApp):
         switchIdString = _convert_int_to_switch_id(dp.id)
         
         # Get neighbors of switch in spanning tree
-        neighbors = self.topology.findNeigborSwitches(switchIdInt)
+        neighbors = self.topology.findNeighborSwitches(switchIdInt)
 
         # Find the ports on which to send the packet to reach the neighbors
         listPorts = []
         for neighbor in neighbors:
-            tmpNeighbor = neighbor
-            if tmpNeighbor == 0:
-                tmpNeighbor = self.topology.s0ID
-            neighborID = _convert_int_to_switch_id(tmpNeighbor)
+            neighborID = _convert_int_to_switch_id(neighbor)
             port = self.linksMap[switchIdString][neighborID]
             listPorts.append(port)
         
@@ -304,7 +298,7 @@ class SpanningTreeController(app_manager.RyuApp):
             for i in range(1, maxN+1):
                 if i not in portsUsed:
                     listPorts.append(str(i))
-        
+
         # Build actions: send on ports to reach neighbors
         actions = []
         for port in listPorts:
@@ -320,7 +314,7 @@ class SpanningTreeController(app_manager.RyuApp):
         data = None
         if msg.buffer_id == ofp.OFP_NO_BUFFER:
             data = msg.data
-        
+
         out = ofp_parser.OFPPacketOut(
             datapath = dp, buffer_id = msg.buffer_id, in_port = msg.in_port,
             actions = actions, data = data
@@ -467,23 +461,9 @@ class SpanningTreeController(app_manager.RyuApp):
         self.links = []
         self.links = copy.copy(links)
 
-        """
-        Find max value because switch s0 has an id randomly generated
-        by Ryu which has the maximum value
-        """
-        s0ID = 1
-        for link in links:
-            if len(link) != 2:
-                continue
-            if link[0] > s0ID:
-                s0ID = link[0]
-            if link[1] > s0ID:
-                s0ID = link[1]
-        self.topology.s0ID = s0ID
-
         self.linksMap.clear()
 
-        nbSwitches = len(self.switches)
+        nbSwitches = len(self.switches) + 1 # +1 because s0 has id 1
         sources = []
         for _ in range(nbSwitches):
             sources.append("0")
@@ -498,17 +478,17 @@ class SpanningTreeController(app_manager.RyuApp):
             sourceOutPort = link['src']['port_no']
 
             sourceIDInt = int(sourceID, 16)
-            if sourceIDInt > len(self.switches):
-                sourceIDInt = 0
 
-            sources[sourceIDInt] = sourceID
-            maps[sourceIDInt].update({destID: sourceOutPort})
+            try:
+                sources[sourceIDInt] = sourceID
+                maps[sourceIDInt].update({destID: sourceOutPort})
+            except IndexError as _:
+                continue
+            
 
         # Group dictionaries by source switch
         for source in sources:
             sourceID = int(source, 16)
-            if sourceID > len(self.switches):
-                sourceID = 0
             self.linksMap.update({source: maps[sourceID]})
     
     def _is_edge_switch(self, switchID: str):
@@ -539,7 +519,7 @@ class SpanningTreeController(app_manager.RyuApp):
     def compute_paths(self, src: str, dst: str) -> list:
         """
         Compute paths between source `src` and destination `dst`.
-        The returned paths  arelimited to links in the spanning tree.
+        The returned paths are limited to links in the spanning tree.
 
         Arguments:
         ----------
@@ -566,13 +546,10 @@ class SpanningTreeController(app_manager.RyuApp):
             _, path = stack.pop()
             # Need to fetch the neighbors of last element of path
             last = path[-1]
-            neighbors = self.topology.findNeigborSwitches(int(last, 16))
+            neighbors = self.topology.findNeighborSwitches(int(last, 16))
 
             for neighbor in neighbors:
-                tmpNeighbor = neighbor
-                if tmpNeighbor == 0:
-                    tmpNeighbor = self.topology.s0ID
-                n = _convert_int_to_switch_id(tmpNeighbor)
+                n = _convert_int_to_switch_id(neighbor)
                 if n == switchDST:
                     validPaths.append(path + [n])
                 elif n not in path: # prevent loop
@@ -636,7 +613,6 @@ def _convert_int_to_switch_id(integer: int) -> str:
 
     return hexString
 
-
 class Topology:
     """
     Represent the topology of the network by an undirected graph where
@@ -654,7 +630,7 @@ class Topology:
         """
         self.nbElements = nbElements
         self._init_graph(self.nbElements)
-        self.s0ID = 0
+        self.minimalST = None
 
     def _init_graph(self, size: int=0):
         """
@@ -679,12 +655,28 @@ class Topology:
         """
 
         print("Topology: size {}".format(self.nbElements))
+        print("   ", end= '')
         for i in range(len(self.graph)):
+            if i == len(self.graph) - 1:
+                if i < 10:
+                    print("|{} |".format(i))
+                else:
+                    print("|{}|".format(i))
+            else:
+                if i < 10:
+                    print("|{} |".format(i), end='')
+                else:
+                    print("|{}|".format(i), end='')
+        for i in range(len(self.graph)):
+            if i < 10:
+                print("{} ".format(i), end=' ')
+            else:
+                print("{}".format(i), end=' ')
             for j in range(len(self.graph[i])):
                 if self.graph[i][j] == 1:
-                    print("x", end='')
+                    print("|x |", end='')
                 else:
-                    print(" ", end='')
+                    print("|  |", end='')
             print("")
         print("")
     
@@ -701,24 +693,8 @@ class Topology:
          of the network elements.
         """
 
-        self.nbElements = nbElements
+        self.nbElements = nbElements + 1 # +1 because switch s0 has id 1
         self._init_graph(self.nbElements)
-
-        """
-        Find max value because switch s0 has an id randomly generated
-        by Ryu which has the maximum value
-        """
-        s0ID = 1
-        for link in links:
-            if len(link) != 2:
-                print("Link {} has an unexpected format".format(link))
-                continue
-            if link[0] > s0ID:
-                s0ID = link[0]
-            if link[1] > s0ID:
-                s0ID = link[1]
-
-        self.s0ID = s0ID
 
         # Fill graph
         for link in links:
@@ -726,98 +702,14 @@ class Topology:
                 print("Link {} has an unexpected format".format(link))
                 continue
 
-            tmp = [0, 0]
-            if link[0] == self.s0ID:
-                tmp[0] = 0
-            else:
-                tmp[0] = link[0]
-
-            if link[1] == self.s0ID:
-                tmp[1] = 0
-            else:
-                tmp[1] = link[1]
-
             # Undirected graph => need to set both directions.
             try:
-                self.graph[tmp[0]][tmp[1]] = 1
-                self.graph[tmp[1]][tmp[0]] = 1
+                self.graph[link[0]][link[1]] = 1
+                self.graph[link[1]][link[0]] = 1
             except IndexError as _:
                 continue
-    
-    def printMST(self, parent: list):
-        """
-        Print the spanning tree.
 
-        Argument:
-        ---------
-        - `parent`: Represent the minimal spanning tree.
-    
-        Source: https://www.geeksforgeeks.org/prims-minimum-spanning-tree-mst-greedy-algo-5/?ref=lbp
-        """
-
-        print("Spanning tree")
-        print("Edge \tWeight")
-        for i in range(1, self.nbElements):
-            print(parent[i], "-", i, " | ", self.graph[i][ parent[i] ])
-        print("")
- 
-    def minKey(self, key: list, mstSet: list) -> int:
-        """
-        Find vertices with minimal cost.
-
-        Return:
-        -------
-        Index of vertex with minimal cost.
-
-        Source: https://www.geeksforgeeks.org/prims-minimum-spanning-tree-mst-greedy-algo-5/?ref=lbp
-        """
- 
-        min = sys.maxsize
-        min_index = 0
- 
-        for v in range(self.nbElements):
-            if key[v] < min and mstSet[v] == False:
-                min = key[v]
-                min_index = v
- 
-        return min_index
- 
-    def primMST(self) -> list:
-        """
-        Compute the minimum spanning tree with Prim's algorithm.
-
-        Return:
-        -------
-        Links that form the minimal spanning tree.
-
-        Source: https://www.geeksforgeeks.org/prims-minimum-spanning-tree-mst-greedy-algo-5/?ref=lbp
-        """
-
-        key = [sys.maxsize] * self.nbElements
-        parent = [None] * self.nbElements # Minimal spanning tree
-        key[0] = 0
-        mstSet = [False] * self.nbElements
- 
-        parent[0] = -1
- 
-        for cout in range(self.nbElements):
- 
-            u = self.minKey(key, mstSet)
-
-            mstSet[u] = True
- 
-            for v in range(self.nbElements):
-                if self.graph[u][v] > 0 and mstSet[v] == False and key[v] > self.graph[u][v]:
-                        key[v] = self.graph[u][v]
-                        parent[v] = u
-        
-        tree = []
-        for i in range(1, self.nbElements):
-            tree.append([parent[i], i])
-
-        return tree
-
-    def findNeigborSwitches(self, switchID: int) -> list:
+    def findNeighborSwitches(self, switchID: int) -> list:
         """
         Find the neighbor switch(es) of the switch with the given ID.
         The neighbors are limited to the ones in the minimal spanning tree.
@@ -831,17 +723,93 @@ class Topology:
         List of IDs of neighbor switches (can be empty).
         """
 
+        # If minimal spanning tree is not computed, compute it and save it
+        if self.minimalST == None:
+
+            # Take subgraph without first column and first element of each row
+            graph = []
+            for i in range(1, len(self.graph)):
+                graph.append(self.graph[i][1:])
+
+            tree = primMST(graph)
+
+            for i in range(len(tree)):
+                if len(tree[i]) != 2:
+                    continue
+                # Need to increase by 1 because s0 has id 1
+                tree[i][0]+=1
+                tree[i][1]+=1
+            
+            self.minimalST = tree
+
         neighbors = []
 
-        if switchID > self.nbElements:
-            switchID = 0
-
-        tree = self.primMST()
-
-        for link in tree:
+        for link in self.minimalST:
+            if len(link) != 2:
+                continue
             if link[0] == switchID:
                 neighbors.append(link[1])
             if link[1] == switchID:
                 neighbors.append(link[0])
 
         return neighbors
+
+def primMST(graph) -> list:
+        """
+        Compute the minimum spanning tree with Prim's algorithm.
+
+        Argument:
+        ---------
+        - `graph`: Graph for which we want the minimal spanning tree.
+
+        Return:
+        -------
+        Links that form the minimal spanning tree.
+
+        Source: https://www.geeksforgeeks.org/prims-minimum-spanning-tree-mst-greedy-algo-5/?ref=lbp
+        """
+
+        key = [sys.maxsize] * len(graph)
+        parent = [None] * len(graph) # Minimal spanning tree
+        key[0] = 0
+        mstSet = [False] * len(graph)
+ 
+        parent[0] = -1
+ 
+        for _ in range(len(graph)):
+ 
+            u = minKey(len(graph), key, mstSet)
+
+            mstSet[u] = True
+ 
+            for v in range(len(graph)):
+                if graph[u][v] > 0 and mstSet[v] == False and key[v] > graph[u][v]:
+                        key[v] = graph[u][v]
+                        parent[v] = u
+
+        tree = []
+        for i in range(1, len(graph)):
+            tree.append([parent[i], i])
+
+        return tree
+
+def minKey(graphSize, key: list, mstSet: list) -> int:
+    """
+    Find vertices with minimal cost.
+
+    Return:
+    -------
+    Index of vertex with minimal cost.
+
+    Source: https://www.geeksforgeeks.org/prims-minimum-spanning-tree-mst-greedy-algo-5/?ref=lbp
+    """
+
+    min = sys.maxsize
+    min_index = 0
+
+    for v in range(graphSize):
+        if key[v] < min and mstSet[v] == False:
+            min = key[v]
+            min_index = v
+
+    return min_index
