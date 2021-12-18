@@ -54,7 +54,7 @@
 \section{General overview}
 
 \subsection{Spanning Tree Controller}
-\paragraph{}This controller, as requested, builds a spanning tree in order to handle cycles in the network. To implement this solution, we first needed to discover the topology of the network. To do so, we used the functions \texttt{get\_host}, \texttt{get\_link}, and \textbf{get\_switch} of Ryu.\\
+\paragraph{}This controller, as requested, builds a spanning tree in order to handle cycles in the network. To implement this solution, we first needed to discover the topology of the network. To do so, we used the functions \texttt{get\_host}, \texttt{get\_link}, and \texttt{get\_switch} of Ryu.\\
 Then, based on the discovered topology, we built a graph of the topology where the vertices are the switches and the edges are the links between the switches. Afterwards, to compute the minimal spanning tree, we used Prim's algorithm.\\
 \indent When packets are received at the controller, through \texttt{switch\_in\_handler} method, we check the source and the destination of each packet.\\
 If the source is one of the host and the destination is broadcast, we broadcast the packet to the switches connected to the one that received it in the minimal spanning tree. Thus, the switches to which we sent the packet will send the packet to the controller that will, once again, do the same processing. At the same time, we set flows in the different switches so the controller will be contacted only once for a particular type of packets and it will reduce the RTT for similar requests.\\
