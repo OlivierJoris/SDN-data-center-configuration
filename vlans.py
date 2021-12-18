@@ -264,7 +264,6 @@ class SpanningTreeController(app_manager.RyuApp):
         # Find ports of the switch which belongs to the VLAN
         listPorts = []
         portsMap = self.switchVLANs[switchIdString]
-        print(portsMap)
 
         for port in portsMap:
             if srcVLANId in portsMap[port]:
@@ -278,10 +277,9 @@ class SpanningTreeController(app_manager.RyuApp):
             for key in keys:
                 portsUsed.append(int(key))
             for i in range(1, maxN+1):
-                if i not in portsUsed and srcVLANId in portsMap[i]:
+                if i not in portsUsed and srcVLANId in portsMap['0000000' + str(i)]:
                     listPorts.append(str(i))
 
-        print(listPorts)
         # Build actions: send on ports to reach neighbors
         actions = []
         for port in listPorts:
