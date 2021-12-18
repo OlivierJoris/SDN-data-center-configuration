@@ -17,9 +17,9 @@ import sys
 MAC_BROADCAST = 'ff:ff:ff:ff:ff:ff' # MAC addr for broadcast
 SIZE_SWITCH_ID_HEX = 16             # Nb of hexadecimal digits in a switch ID
 
-class SpanningTreeController(app_manager.RyuApp):
+class AdaptiveController(app_manager.RyuApp):
     """
-    Implementation of controller that builds a spanning tree.
+    Implementation of controller that set flows depending on load of the switches.
     """
 
     OFP_VERSIONS = [ofproto_v1_0.OFP_VERSION] # Set OpenFlow version
@@ -28,7 +28,7 @@ class SpanningTreeController(app_manager.RyuApp):
         """
         Initialize.
         """
-        super(SpanningTreeController, self).__init__(*args, **kwargs)
+        super(AdaptiveController, self).__init__(*args, **kwargs)
         self.hosts = []             # MAC addresses of the hosts
         self.hostSwitchMapping = {} # Mapping between the id of a host and the id of the switch to which its is connected.
         self.switches = []          # IDs of the switches
@@ -133,6 +133,18 @@ class SpanningTreeController(app_manager.RyuApp):
         # Update list of datapaths
         self.datapath.update({ev.switch.dp.id: ev.switch.dp})
 
+    @set_ev_cls(ofp_event.EventOFPPortStatsReply, MAIN_DISPATCHER)
+    def port_stats_handler(self, ev):
+        """
+        Handler for the statistics of a port.
+
+        Argument:
+        ---------
+        - `ev`: Event received.
+        """
+
+        print(ev.msg.body)
+
     @set_ev_cls(event.EventSwitchLeave, MAIN_DISPATCHER)
     def switch_leave_handler(self, ev):
         """
@@ -208,6 +220,16 @@ class SpanningTreeController(app_manager.RyuApp):
 
         src = eth.src
         dst = eth.dst
+
+        # Request statistics about port
+        print("Port stats for switch {}".format(dp.id))
+        ofp = dp.ofproto
+        ofp_parser = dp.ofproto_parser
+        request = ofp_parser.OFPPortStatsRequest(dp, 0, ofp.OFPP_ALL)
+        dp.send_msg(request)
+
+        if ((src in self.hosts) and (dst in self.hosts)) or ((src in self.hosts) and (dst == MAC_BROADCAST)):
+            print("Packet from {} to {} received at sw {} port {}".format(src, dst, dp.id, msg.in_port))
 
         """
         If the destination is broadcast (e.g. in the case of ARP request) and
