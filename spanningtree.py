@@ -92,8 +92,6 @@ class SpanningTreeController(app_manager.RyuApp):
         self.topology.fill_graph(len(self.switches), self.links)
         self.topology.minimalST = None
 
-        self.topology.print()
-
     @set_ev_cls(event.EventSwitchEnter, MAIN_DISPATCHER)
     def switch_in_handler(self, ev):
         """
@@ -132,6 +130,7 @@ class SpanningTreeController(app_manager.RyuApp):
         # Update topo and build minimal spanning tree
         self.topology.fill_graph(len(self.switches), self.links)
 
+        # Update list of datapaths
         self.datapath.update({ev.switch.dp.id: ev.switch.dp})
 
     @set_ev_cls(event.EventSwitchLeave, MAIN_DISPATCHER)
@@ -209,9 +208,6 @@ class SpanningTreeController(app_manager.RyuApp):
 
         src = eth.src
         dst = eth.dst
-
-        if ((src in self.hosts) and (dst in self.hosts)) or ((src in self.hosts) and (dst == MAC_BROADCAST)):
-            print("Packet from {} to {} received at sw {} port {}".format(src, dst, dp.id, msg.in_port))
 
         """
         If the destination is broadcast (e.g. in the case of ARP request) and
