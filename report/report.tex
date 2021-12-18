@@ -62,9 +62,9 @@ If the source and the destination are both hosts, we compute a path between them
 
 
 \subsection{Using VLANs}
-\paragraph{}The implementation of this controller is based on the one of the spanning tree: everything explained in the previous section is valid except that we are now separating the traffic into VLANs.
-\paragraph{}This controller is building VLANs by mapping each port of the switches to one or several VLANs. This repartition is represented in figure \ref{VLANs_rep}. It is composed of 4 VLANs and the main idea is that each of the four core switches are responsible of the traffic corresponding to one VLAN. 
-Only hosts belonging to the same broadcast can communicate with each other and the broadcast domain is also limited to one VLAN.
+\paragraph{}The implementation of this controller is based on the one of the spanning tree. Everything explained in the previous section is valid except that we are now separating the traffic into VLANs.
+\paragraph{}This controller is building VLANs by mapping each port of the switches to one or several VLANs. This repartition is represented in figure \ref{VLANs_rep} which has been adapted from the picture given in the project statement. It is composed of 4 VLANs and the main idea is that each of the four core switches is responsible of the traffic corresponding to one VLAN. 
+Only hosts belonging to the same VLAN can communicate with each other and the broadcast domain is also limited to this VLAN.
 
 \begin{figure}[H]
     \center
@@ -117,7 +117,7 @@ Yet, the pings, after the first one of each test, have a RTT around the mean val
 Another reason for the high value is the fact that each link has a delay of 50ms as set in the Mininet topology provided. Finally, we should keep in mind that we are running in a virtual environment and not on physical devices thus the measurements are not the most precise. Also, real physical links would not have a delay of 50ms (except for very long distance).
 tree[i][0] == None or tree[i][1] == None.
 
-\paragraph{}If we measure the bandwidth between \texttt{Source} and \texttt{Dest}, we obtain the results expressed in table \ref{table:ST_bw}. We can observe that, when the distance between the host is increasing, the bandwidth is decreasing which is logical because more switches have to be travelled in the tree. Moreover, if we perform mutliple \texttt{iperf} from multiple hosts at the same time, the bandwidth is increasing more.
+\paragraph{}If we measure the bandwidth between \texttt{Source} and \texttt{Dest}, we obtain the results expressed in table \ref{table:ST_bw}. We can observe that, when the distance between the host is increasing, the bandwidth is decreasing which is logical because more switches have to be travelled inside the spanning tree. Moreover, if we perform mutliple \texttt{iperf} from multiple hosts at the same time, the bandwidth is decreasing more.
 
 \begin{table}[H]
     \centering
@@ -144,16 +144,16 @@ tree[i][0] == None or tree[i][1] == None.
     \label{table:ST_bw}
     \end{table}
 
-tree[i][0] == None or tree[i][1] == None
+
 \subsubsection{Tests when a switch/link fails}
 \paragraph{}First, we can try to ping \texttt{h5} from \texttt{h1} and \texttt{h15} from \texttt{h1}. Both pings work as expected. Now, let us simulate a switch failure by typing \texttt{switch s17 stop} in Mininet. Then, ping \texttt{h5} from \texttt{h1} and \texttt{h15} from \texttt{h1}. Both work because our controller react to the change of topology. Now, let us simulate the switch going back up by typing \texttt{switch s17 start} in Mininet and do the same 2 pings as before. Both work because our controller react to the change of topology.\\
 This simple test is available in the file \texttt{test\_spanning\_tree\_failure.sh}.
 
 \subsection{Using VLANs}
-The scripts used to performed these tests are available in the \texttt{test\_vlans.sh} shell script.
+The scripts used to performed these tests are available in the \texttt{test\_vlans.sh} script.
 \subsubsection{Reachability}
 
-\paragraph{}The reachability can be verified using the \texttt{pingall} command which give the input represented on the \ref{VLANs_reach}. We observe that hosts can communicate each other only if they belong to the same VLAN.
+\paragraph{}The reachability can be verified using the \texttt{pingall} command which give the output represented on the \ref{VLANs_reach}. We observe that hosts can communicate each other only if they belong to the same VLAN.
 
 \begin{figure}[H]
 \center
@@ -164,7 +164,7 @@ The scripts used to performed these tests are available in the \texttt{test\_vla
 
 \subsubsection{Measures}
 
-\paragraph{}If we ping 10 times from \texttt{Source} to \texttt{Dest}, we obtain the results of table \ref{table:VLANs_pings}. We observe that the VLANs are measures are quite similar for each VLAN which is normal because all VLANs are distributed with the same number of switches and hosts. 
+\paragraph{}If we ping 10 times from \texttt{Source} to \texttt{Dest}, we obtain the results of table \ref{table:VLANs_pings}. We observe that the measures are quite similar for each VLAN which is logical because all VLANs are distributed with the same number of switches and hosts. 
 \begin{table}[H]
     \centering
     \begin{tabular}{|l|l|l|l|}
@@ -187,7 +187,7 @@ The scripts used to performed these tests are available in the \texttt{test\_vla
     \label{table:VLANs_pings}
     \end{table}
 
-\paragraph{}If we measure the bandwidth between \texttt{Source} and \texttt{Dest}, we obtain the results expressed in table \ref{table:VLANs_bw}. We observe that the VLANs are measures are quite similar for each VLAN which is normal because all VLANs are distributed with the same number of switches and hosts. These measures stay stable when combining \texttt{iperf} from different VLAN at the same time which is the principal interest to use this controller with respect to the spanning tree controller.
+\paragraph{}If we measure the bandwidth between \texttt{Source} and \texttt{Dest}, we obtain the results expressed in table \ref{table:VLANs_bw}. We observe that the measures are quite similar for each VLAN which is logical for the same reason as for the measures relative to ping. These measures stay stable when combining \texttt{iperf} from different hosts of differents VLANs at the same time which is the principal interest to use this controller rather than the spanning tree controller.
 \begin{table}[H]
     \centering
     \begin{tabular}{|l|l|l|}
