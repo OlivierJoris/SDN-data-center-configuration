@@ -23,6 +23,7 @@ class SpanningTreeController(app_manager.RyuApp):
         self.switches = []          # ID of the switches
         self.switchesMapping = []   # Mapping between the switches' ids and mac addresses + ports
         self.links = []             # List of links
+        self.linksMap = {}          # Mapping between a switch id and the id of a neighbor switch and the port to reach it.
         self.topology = Topology(0) # Represent the topology
 
     @set_ev_cls(event.EventSwitchEnter, MAIN_DISPATCHER)

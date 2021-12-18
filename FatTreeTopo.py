@@ -26,6 +26,7 @@ class FatTreeTopo(Topo):
         self.maxQ = maxQ
         self.delay = delay
         self.linkBandwidth = linkBandwidth
+        self.totalNbHosts = self.nbPods * ( k/2 * k/2 )
 
         if self.k % 2 != 0:
             raise runtime_error(
@@ -81,13 +82,13 @@ class FatTreeTopo(Topo):
             self.hostsLayer[-1].append(h)
 
     def _addSwitch(self):
-        sw = self.addSwitch("s" + str(self.nbSwitches))
+        sw = self.addSwitch("s" + str(self.nbSwitches + 1))
         self.nbSwitches = self.nbSwitches + 1
 
         return sw
 
     def _addHost(self):
-        h = self.addHost("h" + str(self.nbHosts))
+        h = self.addHost("h" + str(self.nbHosts + 1), cpu=1.0/self.totalNbHosts)
         self.nbHosts = self.nbHosts + 1
 
         return h
@@ -157,7 +158,7 @@ if __name__ == "__main__":
         delay=args.delay
     )
 
-    controller = RemoteController('c0')
+    controller = RemoteController('c0', protocols="OpenFlow10")
 
     net = Mininet(topo=topo, link=TCLink, switch=OVSSwitch,
                   controller=RemoteController('c0'), autoSetMacs=True)
