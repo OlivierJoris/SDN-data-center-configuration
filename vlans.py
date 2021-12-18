@@ -17,9 +17,9 @@ import sys
 MAC_BROADCAST = 'ff:ff:ff:ff:ff:ff' # MAC addr for broadcast
 SIZE_SWITCH_ID_HEX = 16             # Nb of hexadecimal digits in a switch ID
 
-class SpanningTreeController(app_manager.RyuApp):
+class VLANController(app_manager.RyuApp):
     """
-    Implementation of controller that builds a spanning tree.
+    Implementation of controller that create VLANs.
     """
 
     OFP_VERSIONS = [ofproto_v1_0.OFP_VERSION] # Set OpenFlow version
@@ -28,7 +28,7 @@ class SpanningTreeController(app_manager.RyuApp):
         """
         Initialize.
         """
-        super(SpanningTreeController, self).__init__(*args, **kwargs)
+        super(VLANController, self).__init__(*args, **kwargs)
         self.hosts = []             # MAC addresses of the hosts
         self.hostSwitchMapping = {} # Mapping between the id of a host and the id of the switch to which its is connected.
         self.switches = []          # IDs of the switches
@@ -89,9 +89,8 @@ class SpanningTreeController(app_manager.RyuApp):
         self.links = []
         self.links = copy.copy(links)
 
-        # Update topo and remove minimal spanning tree
+        # Update topo
         self.topology.fill_graph(len(self.switches), self.links)
-        self.topology.minimalST = None
 
         self.topology.print()
 
@@ -128,7 +127,7 @@ class SpanningTreeController(app_manager.RyuApp):
         # Map of links
         self._update_link_map()
 
-        # Update topo and build minimal spanning tree
+        # Update topo 
         self.topology.fill_graph(len(self.switches), self.links)
 
         self.datapath.update({ev.switch.dp.id: ev.switch.dp})
@@ -145,6 +144,7 @@ class SpanningTreeController(app_manager.RyuApp):
         """
 
         self.rebuild_topo()
+        self.create_vlans()
     
     @set_ev_cls(event.EventSwitchReconnected, MAIN_DISPATCHER)
     def switch_reconnect_handler(self, ev):
@@ -158,6 +158,7 @@ class SpanningTreeController(app_manager.RyuApp):
         self.rebuild_topo()
 
         self.datapath.update({ev.switch.dp.id: ev.switch.dp})
+        self.create_vlans()
 
     @set_ev_cls(event.EventPortDelete, MAIN_DISPATCHER)
     def port_delete_handler(self, ev):
@@ -169,6 +170,7 @@ class SpanningTreeController(app_manager.RyuApp):
         """
 
         self.rebuild_topo()
+        self.create_vlans()
 
     @set_ev_cls(event.EventLinkDelete, MAIN_DISPATCHER)
     def link_delete_handler(self, ev):
@@ -180,6 +182,7 @@ class SpanningTreeController(app_manager.RyuApp):
         """
 
         self.rebuild_topo()
+        self.create_vlans()
 
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def packet_in_handler(self, ev):
@@ -213,7 +216,7 @@ class SpanningTreeController(app_manager.RyuApp):
         """
         If the destination is broadcast (e.g. in the case of ARP request) and
         the src is one of the host, need to broadcast on all the ports of the
-        switch connected to the spanning tree
+        switch in the same VLAN
         """
         if src in self.hosts and dst == MAC_BROADCAST:
             self.flood_neigbors(ev)
@@ -224,11 +227,15 @@ class SpanningTreeController(app_manager.RyuApp):
         between them and set flows along the path.
         """
         if (src in self.hosts) and (dst in self.hosts):
+            """ 
+            Two hosts belonging to different VLANs are not allowed to
+            communicate.
+            """
+            if self.hostVLANs[src] != self.hostVLANs[dst]:
+                return 
+
             paths = self.compute_paths(src, dst)
             self.add_flows_path(ev, paths)
-            return
-
-        return
 
     def flood_neigbors(self, ev):
         """
@@ -347,7 +354,7 @@ class SpanningTreeController(app_manager.RyuApp):
         
         # If source and destination are connected to different switches
         elif len(paths) >= 1 and len(paths[0]) > 1:
-            # Should have only one path due to minimal spanning tree
+            # Should have only one path due to VLANs
             in_port = msg.in_port
 
             for index in range(len(paths[0])):
@@ -388,8 +395,6 @@ class SpanningTreeController(app_manager.RyuApp):
             )
 
             dp.send_msg(out)
-
-        return
 
     def _update_hosts_list(self):
         """
@@ -468,7 +473,7 @@ class SpanningTreeController(app_manager.RyuApp):
         for source in sources:
             sourceID = int(source, 16)
             self.linksMap.update({source: maps[sourceID]})
-    
+
     def _is_edge_switch(self, switchID: str):
         """
         Return true if the switch is a edge/TOR switch. Else, return false.
@@ -495,7 +500,8 @@ class SpanningTreeController(app_manager.RyuApp):
     def compute_paths(self, src: str, dst: str) -> list:
         """
         Compute paths between source `src` and destination `dst`.
-        The returned paths are limited to links in the spanning tree.
+        The returned paths are limited to links belonging to the same VLAN.
+        `src` and `dst` must belong to the same VLAN.
         Arguments:
         ----------
         - `src`: MAC address of source host.
@@ -504,10 +510,12 @@ class SpanningTreeController(app_manager.RyuApp):
         --------
         - Paths between 2 hosts where a path is a list of switch ids (list of str).
         """
-
         # Get switch to which src and dst are connected
         switchSRC = self.hostSwitchMapping[src]['dpid']
         switchDST = self.hostSwitchMapping[dst]['dpid']
+
+        # Get VLAN id of the source and destination
+        VLANId = self.hostVLANs[src]
 
         # If src and dst are connected to the same switch, return simple path
         if switchSRC == switchDST:
@@ -520,14 +528,27 @@ class SpanningTreeController(app_manager.RyuApp):
             _, path = stack.pop()
             # Need to fetch the neighbors of last element of path
             last = path[-1]
-            neighbors = self.topology.findNeighborSwitches(int(last, 16))
+
+            # Find ports of the switch which belongs to the VLAN
+            listPorts = []
+            portsMap = self.switchVLANs[last]
+
+            for port in portsMap:
+                if VLANId in portsMap[port]:
+                    listPorts.append(port)
+
+            neighbors = []
+
+            for port in listPorts:
+                for neighbor in self.linksMap[last]:
+                    if self.linksMap[last][neighbor] == port:
+                        neighbors.append(neighbor)
 
             for neighbor in neighbors:
-                n = _convert_int_to_switch_id(neighbor)
-                if n == switchDST:
-                    validPaths.append(path + [n])
-                elif n not in path: # prevent loop
-                    stack.append((n, path + [n]))
+                if neighbor == switchDST:
+                    validPaths.append(path + [neighbor])
+                elif neighbor not in path: # prevent loop
+                    stack.append((neighbor, path + [neighbor]))
 
         return validPaths
 
@@ -641,11 +662,6 @@ class SpanningTreeController(app_manager.RyuApp):
                             self.switchVLANs[switch].update({port : VLANid})
                         else:
                             self.switchVLANs.update({switch : newMap})
-
-        # print("host VLANS:")
-        # print(self.hostVLANs)
-        # print("switch VLANs:")
-        # print(self.switchVLANs)
 
 def _convert_port_description_to_dict(portsDesc: list) -> dict:
     """
@@ -809,101 +825,3 @@ class Topology:
                 self.graph[link[1]][link[0]] = 1
             except IndexError as _:
                 continue
-
-    def findNeighborSwitches(self, switchID: int) -> list:
-        """
-        Find the neighbor switch(es) of the switch with the given ID.
-        The neighbors are limited to the ones in the minimal spanning tree.
-        Argument:
-        ---------
-        - `switchID`: ID of the switch we are considering.
-        Return:
-        -------
-        List of IDs of neighbor switches (can be empty).
-        """
-
-        # If minimal spanning tree is not computed, compute it and save it
-        if self.minimalST == None:
-
-            # Take subgraph without first column and first element of each row
-            graph = []
-            for i in range(1, len(self.graph)):
-                graph.append(self.graph[i][1:])
-
-            tree = primMST(graph)
-
-            for i in range(len(tree)):
-                if len(tree[i]) != 2 or tree[i][0] == None or tree[i][1] == None:
-                    continue
-                # Need to increase by 1 because s0 has id 1
-                tree[i][0]+=1
-                tree[i][1]+=1
-
-            self.minimalST = tree
-
-        neighbors = []
-
-        for link in self.minimalST:
-            if len(link) != 2 or link[0] == None or link[1] == None:
-                continue
-            if link[0] == switchID:
-                neighbors.append(link[1])
-            if link[1] == switchID:
-                neighbors.append(link[0])
-
-        return neighbors
-
-def primMST(graph) -> list:
-        """
-        Compute the minimum spanning tree with Prim's algorithm.
-        Argument:
-        ---------
-        - `graph`: Graph for which we want the minimal spanning tree.
-        Return:
-        -------
-        Links that form the minimal spanning tree.
-        Source: https://www.geeksforgeeks.org/prims-minimum-spanning-tree-mst-greedy-algo-5/?ref=lbp
-        """
-
-        key = [sys.maxsize] * len(graph)
-        parent = [None] * len(graph) # Minimal spanning tree
-        key[0] = 0
-        mstSet = [False] * len(graph)
- 
-        parent[0] = -1
- 
-        for _ in range(len(graph)):
- 
-            u = minKey(len(graph), key, mstSet)
-
-            mstSet[u] = True
- 
-            for v in range(len(graph)):
-                if graph[u][v] > 0 and mstSet[v] == False and key[v] > graph[u][v]:
-                        key[v] = graph[u][v]
-                        parent[v] = u
-
-        tree = []
-        for i in range(1, len(graph)):
-            tree.append([parent[i], i])
-
-        return tree
-
-def minKey(graphSize, key: list, mstSet: list) -> int:
-    """
-    Find vertices with minimal cost.
-    Return:
-    -------
-    Index of vertex with minimal cost.
-    Source: https://www.geeksforgeeks.org/prims-minimum-spanning-tree-mst-greedy-algo-5/?ref=lbp
-    """
-
-    min = sys.maxsize
-    min_index = 0
-
-    for v in range(graphSize):
-        if key[v] < min and mstSet[v] == False:
-            min = key[v]
-            min_index = v
-
-    return min_index
