@@ -63,7 +63,7 @@ If the source and the destination are both hosts, we compute a path between them
 
 \subsection{Using VLANs}
 \paragraph{}The implementation of this controller is based on the one of the spanning tree. Everything explained in the previous section is valid except that we are now separating the traffic into VLANs.
-\paragraph{}This controller is building VLANs by mapping each port of the switches to one or several VLANs. This repartition is represented in figure \ref{VLANs_rep} which has been adapted from the picture given in the project statement. It is composed of 4 VLANs and the main idea is that each of the four core switches is responsible of the traffic corresponding to one VLAN. 
+\paragraph{}This controller is building VLANs by mapping each port of the switches to one or several VLANs. This distribution is represented in figure \ref{VLANs_rep} which has been adapted from the picture given in the project statement. It is composed of 4 VLANs and the main idea is that each of the four core switches is responsible of the traffic corresponding to one VLAN. 
 Only hosts belonging to the same VLAN can communicate with each other and the broadcast domain is also limited to this VLAN.
 
 \begin{figure}[H]
@@ -115,9 +115,8 @@ H1-H16                                     & 701ms                              
 We can see that the first ping always take a lot of time. This is explained because the first ping we will have as consequence to send multiple packets to the controller. First, it will send packets to the controller related to the ARP request to learn the MAC address of the destination. Then, it will send packets to the controller related to the icmp messages which will require the computation of paths between the host and the destination. All the processing in the controller is done in Python which is well known to be a slow language. Furthermore, these tests were performed on Maxime's computer which had the vm lock with an execution cap at 10\% (see in section \ref{sec:feedback} the explanation).\\
 Yet, the pings, after the first one of each test, have a RTT around the mean value. The high values of MDEV are explained by the fact that the first ping take a lot of time thus it increases the values of MDEV.\\
 Another reason for the high value is the fact that each link has a delay of 50ms as set in the Mininet topology provided. Finally, we should keep in mind that we are running in a virtual environment and not on physical devices thus the measurements are not the most precise. Also, real physical links would not have a delay of 50ms (except for very long distance).
-tree[i][0] == None or tree[i][1] == None.
 
-\paragraph{}If we measure the bandwidth between \texttt{Source} and \texttt{Dest}, we obtain the results expressed in table \ref{table:ST_bw}. We can observe that, when the distance between the host is increasing, the bandwidth is decreasing which is logical because more switches have to be travelled inside the spanning tree. Moreover, if we perform mutliple \texttt{iperf} from multiple hosts at the same time, the bandwidth is decreasing more.
+\paragraph{}If we measure the bandwidth between \texttt{Source} and \texttt{Dest}, we obtain the results expressed in table \ref{table:ST_bw}. We can observe that, when the distance between the host is increasing, the bandwidth is decreasing which is logical because more switches have to be traversed inside the spanning tree. Moreover, if we perform multiple \texttt{iperf} from multiple hosts at the same time, the bandwidth is decreasing more.
 
 \begin{table}[H]
     \centering
@@ -150,10 +149,10 @@ tree[i][0] == None or tree[i][1] == None.
 This simple test is available in the file \texttt{test\_spanning\_tree\_failure.sh}.
 
 \subsection{Using VLANs}
-The scripts used to performed these tests are available in the \texttt{test\_vlans.sh} script.
+The commands used to performed these tests are available in the \texttt{test\_vlans.sh} script.
 \subsubsection{Reachability}
 
-\paragraph{}The reachability can be verified using the \texttt{pingall} command which give the output represented on the \ref{VLANs_reach}. We observe that hosts can communicate each other only if they belong to the same VLAN.
+\paragraph{}The reachability can be verified using the \texttt{pingall} command which give the output represented on the figure \ref{VLANs_reach}. We observe that hosts can communicate with each other only if they belong to the same VLAN.
 
 \begin{figure}[H]
 \center
@@ -187,7 +186,7 @@ The scripts used to performed these tests are available in the \texttt{test\_vla
     \label{table:VLANs_pings}
     \end{table}
 
-\paragraph{}If we measure the bandwidth between \texttt{Source} and \texttt{Dest}, we obtain the results expressed in table \ref{table:VLANs_bw}. We observe that the measures are quite similar for each VLAN which is logical for the same reason as for the measures relative to ping. These measures stay stable when combining \texttt{iperf} from different hosts of differents VLANs at the same time which is the principal interest to use this controller rather than the spanning tree controller.
+\paragraph{}If we measure the bandwidth between \texttt{Source} and \texttt{Dest}, we obtain the results expressed in table \ref{table:VLANs_bw}. We observe that the measures are quite similar for each VLAN which is logical for the same reason as for the measures relative to ping. These measures stay stable when combining \texttt{iperf} from different hosts of different VLANs at the same time which is the principal interest to use this controller rather than the spanning tree controller.
 \begin{table}[H]
     \centering
     \begin{tabular}{|l|l|l|}
