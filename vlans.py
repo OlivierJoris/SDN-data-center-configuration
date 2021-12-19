@@ -92,8 +92,6 @@ class VLANController(app_manager.RyuApp):
         # Update topo
         self.topology.fill_graph(len(self.switches), self.links)
 
-        self.topology.print()
-
     @set_ev_cls(event.EventSwitchEnter, MAIN_DISPATCHER)
     def switch_in_handler(self, ev):
         """
@@ -210,9 +208,6 @@ class VLANController(app_manager.RyuApp):
         src = eth.src
         dst = eth.dst
 
-        if ((src in self.hosts) and (dst in self.hosts)) or ((src in self.hosts) and (dst == MAC_BROADCAST)):
-            print("Packet from {} to {} received at sw {} port {}".format(src, dst, dp.id, msg.in_port))
-
         """
         If the destination is broadcast (e.g. in the case of ARP request) and
         the src is one of the host, need to broadcast on all the ports of the
@@ -232,7 +227,7 @@ class VLANController(app_manager.RyuApp):
             communicate.
             """
             if self.hostVLANs[src] != self.hostVLANs[dst]:
-                return 
+                return
 
             paths = self.compute_paths(src, dst)
             self.add_flows_path(ev, paths)
@@ -714,24 +709,6 @@ def _convert_port_description_to_dict(portsDesc: list) -> dict:
         ports.update({portsDesc[i]['port_no']: portsDesc[i]['hw_addr']})
     
     return ports
-
-def _convert_int_to_switch_id(integer: int) -> str:
-    """
-    Convert an integer in base 10 to a switch id as a string.
-    Arguments:
-    ----------
-    - `integer`: Integer to convert to string.
-    Return:
-    -------
-    Switch ID as a string.
-    """
-
-    hexString = hex(integer)
-    hexString = hexString[2:] # Remove 0x at the beginning of string
-    for _ in range(SIZE_SWITCH_ID_HEX - len(hexString)):
-        hexString = "0" + hexString
-
-    return hexString
 
 class Topology:
     """
